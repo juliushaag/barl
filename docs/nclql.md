@@ -1,7 +1,9 @@
 # NCLQL sampler
 
 NCLQL samples actions using a noise-conditioned critic and annealed Langevin
-updates. The nominal step at level `i` is
+updates. `steps_per_level` lists the number of substeps at each noise level
+(one entry per level of the critic's noise ladder, coarsest first); the chain
+runs as a single `lax.scan` over that schedule. The nominal step at level `i` is
 `alpha_i = step_lr * (sigma_i / sigma_last)^2`. The update adds
 `0.5 * alpha_i * temperature * score` and Gaussian noise with standard
 deviation `sqrt(alpha_i)`, then clips the action to the configured bounds.
@@ -24,3 +26,16 @@ Debug metrics `actor/chain/step_size_l<i>`, `drift_norm_l<i>` and
 the fraction of coordinates outside the bounds before clipping in that
 level's last substep. `actor/action/frac_at_limit` measures the final sampled
 actions during training; these metrics do not measure optimizer clipping.
+
+## Reduced-precision sampling
+
+`model.components.actor.sample_dtype: bfloat16` runs the Langevin chain on a
+copy of the critic whose weights are stored and computed in bf16; the critic
+that is trained is untouched, and the copy is rebuilt on every call. The chain
+is bound by reading the critic's weights, so on an RTX 3090 with the default
+critic (2 members, 2048 latent, 21-dim actions, 10 substeps) this cuts the
+256-row bootstrap in `train_step` from about 8.0 to 4.4 ms (1.8x). A
+single-env rollout step gains about 5%, 16 envs about 1.5x. Sampled actions
+differ from fp32 by about 0.004 on average with the same key; a different key
+alone moves them by about 0.6. Returns have not been compared on a trained
+run. The default is `float32`.

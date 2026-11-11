@@ -53,7 +53,7 @@ class EnsembleConfig:
 @dataclass(frozen=True)
 class NoiseConditioningConfig:
   enabled: bool = False
-  schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+  schedule: ScheduleConfig = field(default_factory=lambda: ScheduleConfig(steps = 3))
   time: TimeEmbeddingConfig = field(default_factory=FourierTimeConfig)
   smoothing_coef: float = 1.0
 

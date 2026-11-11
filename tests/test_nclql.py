@@ -23,6 +23,7 @@ class _QuadraticCritic(nnx.Module):
 
 
 def _sample(dim, **config):
+  config = {"steps_per_level": [2] * 8, **config}
   stats = make_env_stats(act_dim=dim, act_low=np.full(dim, -1., np.float32),
                          act_high=np.full(dim, 1., np.float32))
   actor = build("LangevinActor", env_stats=stats, **config)
@@ -73,3 +74,38 @@ def test_disabled_step_cap_restores_reference_schedule():
 def test_invalid_step_cap_is_rejected(limit):
   with pytest.raises(ValueError, match="max_step_size"):
     build("LangevinActor", max_step_size=limit)
+
+
+def _policy(sample_dtype):
+    from test_policies import FakeEnv
+
+    from barl_jax.config.run import RunConfig
+    from barl_jax.policy import Policy
+
+    run = RunConfig.from_dict({
+        "model": "NCLQL", "env": "HalfCheetah",
+        "model_overrides": {"components": {
+            "actor": {"sample_dtype": sample_dtype}, "critic": {"latent_dim": 64}}}})
+    return Policy.make("NCLQL", FakeEnv(), run.model_config, env_stats=make_env_stats(), seed=0)
+
+
+def test_reduced_precision_sampling_tracks_full_precision_and_leaves_the_critic_alone():
+    full, reduced = _policy("float32"), _policy("bfloat16")
+    nnx.update(reduced, nnx.state(full))
+    obs = jax.random.normal(jax.random.PRNGKey(0), (64, full.actor.obs_dim))
+    key = jax.random.PRNGKey(1)
+
+    a_full, _ = full.actor.generate_action(obs, critic=full.critic, key=key)
+    a_reduced, _ = reduced.actor.generate_action(obs, critic=reduced.critic, key=key)
+
+    assert a_reduced.dtype == jnp.float32
+    assert bool(jnp.all(jnp.isfinite(a_reduced)))
+    # Different keys move an action by O(1); bf16 rounding must be far below that.
+    other, _ = full.actor.generate_action(obs, critic=full.critic, key=jax.random.PRNGKey(2))
+    assert float(jnp.abs(a_full - a_reduced).mean()) < 0.1 * float(jnp.abs(a_full - other).mean())
+    assert {l.dtype for l in jax.tree.leaves(nnx.state(reduced.critic, nnx.Param))} == {np.dtype("float32")}
+
+
+def test_unknown_sample_dtype_is_rejected():
+    with pytest.raises(ValueError, match="sample_dtype"):
+        _policy("float64")
