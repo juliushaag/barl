@@ -11,21 +11,20 @@ uv sync
 uv run pytest tests/ -q
 ```
 
-The repository environment includes the simulator families and CUDA dependencies
-used for experiments. The library can also be installed independently from
-`src/barl_jax`, with optional `logging`, `mujoco`, `dm-control`, `mani-skill` and
-`humanoid-bench` extras. HumanoidBench experiments use the local submodule and
-compatibility constraints declared in the root `pyproject.toml`.
+The project environment includes the simulator families and CUDA dependencies
+used for experiments. HumanoidBench is installed from the `third_party/humanoid-bench`
+submodule (`git submodule update --init` before `uv sync`), with the compatibility
+constraints declared in `pyproject.toml`.
 
 ```bash
-uv build src/barl_jax
+uv build --wheel
 ```
 
 `uv run ruff check .` lints the first-party tree (`third_party/`, `wandb/`, `sweeps/`
 and `checkpoints/` are excluded); the rule set is deliberately small for now
 (syntax errors, pyflakes, import sorting -- see `[tool.ruff]` in `pyproject.toml`).
 
-The command-line tools are limited to four scripts:
+The command-line tools live in `scripts/`:
 
 - `scripts/submit.py`: build a grid (or replay a saved config) and hand each run off
   to an executor -- local, tmux, or Slurm. It never trains or evaluates anything
@@ -39,6 +38,7 @@ The command-line tools are limited to four scripts:
   `--eval-config` submission.
 - `scripts/debug.py`: report package/backend diagnostics and resolved model settings;
   `--json` produces output suitable for sharing with an LLM.
+- `scripts/egl_probe.py`: diagnose headless EGL rendering failures on a compute node.
 
 ```bash
 uv run python scripts/debug.py --model SAC --json
@@ -47,7 +47,7 @@ uv run python scripts/evaluate.py sweeps/<submission> --mode default mean --json
 ```
 
 CI runs Ruff, the CPU test suite, an installed-wheel import check, and the CPU
-example against the standalone library. Slurm/tmux executor support lives in the top-level
+example, installing the package with `--no-deps` plus a CPU-only dependency set. Slurm/tmux executor support lives in the top-level
 `launch/` package (not part of the installed library); it is an implementation detail of `submit.py`, which shells
 out to train.py/evaluate.py exactly as a human running one of them directly
 would.
@@ -89,7 +89,6 @@ They use the existing training, replay, evaluation, and checkpoint interfaces.
 
 ```bash
 uv run python scripts/submit.py --algos SAC --envs MyoHandReachRandom --seeds 3 --dry-run
-BARL_ALLOW_CPU=1 JAX_PLATFORMS=cpu uv run python scripts/train.py --config experiments/sac_myosuite_smoke.yaml
 ```
 
 The adapter seeds randomized targets before reset, reports MyoSuite's episode
@@ -118,8 +117,8 @@ By default (`distill=true`) actors price through a distilled Q-ensemble of the s
 The training CLI requires an accelerator. Set `BARL_ALLOW_CPU=1` for intentional
 CPU smoke tests. Rendering uses EGL by default in the training CLI.
 
-Every run config is preflight-checked (`barl_jax.config.run.validate_run`, plus
-`barl_jax.config.tree.validate` for the model half) before an environment, a
+Every run config is preflight-checked (`barl_jax.config.run.validate_run` and the
+typed model config's own checks) before an environment, a
 policy, or a JAX device buffer is allocated -- an invalid `total_env_steps`,
 `checkpoint_mode`, `lr_decay`, etc. fails immediately with the offending key,
 value and violated rule, not partway through setup.
@@ -271,11 +270,9 @@ changes cannot affect their components. `chunk_size` is a policy param
 (`model.params.chunk_size`), not a run key. Import contracts, checkpoint functions and inference utilities from
 their owning modules. Older checkpoint formats are rejected explicitly.
 
-Observation normalization now updates running moments from each training batch,
-before the objective runs. Inference reads those moments without updating them.
-This activates the previously ineffective `normalize_obs: true` setting and
-changes new training results. Set `model.params.normalize_obs=false` through the
-usual override mechanism to retain unnormalized inputs.
+Observation normalization is off by default. With `model.params.normalize_obs=true`,
+running moments are updated from each training batch before the objective runs;
+inference reads those moments without updating them.
 
 ## Checkpoints
 

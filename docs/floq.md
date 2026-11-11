@@ -34,17 +34,14 @@ with larger rewards. `noise_coverage` still sets the interval before this cap.
 
 ## Learning diagnostic
 
-Run a local SAC comparison with:
+Compare floq against the other critics with the committed grid:
 
 ```bash
-.venv/bin/python scripts/train.py --config experiments/sac_floq_smoke.yaml \
-  --run-dir /tmp/floq-bounded
+uv run python scripts/submit.py --grid experiments/sac_floq_critic.yaml --seeds 2 --dry-run
 ```
 
-The config uses one seed, reduced network widths, 10,000 gradient updates,
-and five evaluations of three episodes each. For an unrestricted comparison,
-change its `noise_limit` to null and use a separate run directory. This is a
-short learning diagnostic, not a multi-seed benchmark.
+For an unrestricted-noise comparison, add
+`--set model.components.critic.noise_limit=null` and use a separate sweep directory.
 
 `tests/test_floq.py` checks Euler integration and flow/distillation equations,
 target copying, gradients, sampling configuration, source-noise bounds, and

@@ -95,5 +95,8 @@ def test_c51_resolves_a_realistic_dm_control_value_gap(q_gap):
     boot = jnp.zeros((1, n)).at[0, n // 2].set(1.0)
     terminal = lambda q: c.bellman_target(jnp.array([q]), jnp.ones((1,)), jnp.ones((1,)), boot)
 
-    l1 = float(jnp.abs(terminal(0.0) - terminal(q_gap)).sum())
+    # Start on an atom: with an even `num_bins` zero is a bin midpoint, and a
+    # target there is already a 50/50 split, which the formula doesn't model.
+    q0 = float(c.support_values()[n // 2])
+    l1 = float(jnp.abs(terminal(q0) - terminal(q0 + q_gap)).sum())
     assert l1 == pytest.approx(min(2.0, 2 * q_gap / bin_width), rel=1e-3)
