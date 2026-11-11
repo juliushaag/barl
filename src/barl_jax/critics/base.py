@@ -293,7 +293,7 @@ class QCritic(Critic):
 
   def record(self, raw, target) -> None:
     exp = self.expectation_members(raw)
-    self.metrics.dist("critic", exp.mean(axis=0))
+    self.metrics.dist("q", exp.mean(axis=0))
     self.metrics.dist("q_target", self.target_expectation(target))
     self.metrics.ensemble("ensemble", exp, gap=self.pessimism_gap(raw))
 

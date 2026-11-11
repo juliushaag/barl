@@ -142,7 +142,6 @@ class FloqCritic(ScalarValue, QCritic):
   Bellman target with the other scalar critics; only the network, `raw` and the
   regression objective differ."""
 
-  kind = "critic"
   config_type = FloqCriticConfig
 
   def __init__(self, env_stats, config, *, rngs: nnx.Rngs, **kwargs):

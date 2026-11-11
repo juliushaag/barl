@@ -15,7 +15,6 @@ class Squash(Component, nnx.Module, ABC):
   own `squash_cls` setting (`ErfSquash` sets its `erf_k` from the noise
   schedule)."""
 
-  kind = "squash"
 
   def __init__(self, env_stats=None, config=None, **kwargs):
     """Absorbs kwargs a concrete Squash doesn't need -- e.g. AMDP always

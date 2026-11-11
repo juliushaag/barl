@@ -227,11 +227,11 @@ class CategoricalCritic(QCritic):
     violation = leak - self.config.support_eps
     dual = self.dual[...]
 
-    self.metrics.scalar("support_min", lo)
-    self.metrics.scalar("support_max", hi)
-    self.metrics.scalar("support_sigma", sigma)
-    self.metrics.scalar("support_leak", leak)
-    self.metrics.scalar("support_dual", dual)
+    self.metrics.scalar("support/min", lo)
+    self.metrics.scalar("support/max", hi)
+    self.metrics.scalar("support/sigma", sigma)
+    self.metrics.scalar("support/leak", leak)
+    self.metrics.scalar("support/dual", dual)
     width = self.config.support_alpha * jnp.maximum(jnp.abs(lo), jnp.abs(hi))
     return {"support": width + jax.lax.stop_gradient(dual) * violation,
             "support_dual": -dual * jax.lax.stop_gradient(violation)}
@@ -275,7 +275,6 @@ class CategoricalCritic(QCritic):
 class C51Critic(CategoricalCritic):
   """Atoms on a linspace; the bootstrap distribution is projected."""
 
-  kind = "critic"
   config_type = C51CriticConfig
 
   # The fixed support has no use for sigma: the projection never smooths.
@@ -312,7 +311,6 @@ class C51Critic(CategoricalCritic):
 class HLGaussCritic(CategoricalCritic):
   """Bin centers as support; the scalar TD target is smoothed into a histogram."""
 
-  kind = "critic"
   config_type = HLGaussCriticConfig
 
   def _intervals(self) -> int:

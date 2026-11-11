@@ -43,7 +43,6 @@ class LangevinActor(ActionSampler):
   """
 
   config_type = LangevinActorConfig
-  kind = "sampler"
   critic_objective = "noise_td"
 
   def __init__(self, env_stats, config: LangevinActorConfig, *, rngs, **kwargs):

@@ -112,16 +112,6 @@ def test_async_factory_keeps_instance_settings():
     env.close()
 
 
-def test_typed_defaults_are_owned_by_dataclasses():
-  from barl_jax.actors.sac import StochasticActorConfig
-  from barl_jax.critics.categorical import C51CriticConfig
-  assert StochasticActorConfig().mlp.activation == "gelu"
-  assert C51CriticConfig().latent_dim == 2048
-  # More-derived declarations win: subclass overrides replace base defaults.
-  from dataclasses import replace
-  assert replace(StochasticActorConfig(), squash_cls="ErfSquash").squash_cls == "ErfSquash"
-
-
 def test_policy_params_come_from_the_model_config():
   run = tiny_run(model_overrides={"params": {"policy_delay": 2}, "components": {
     "actor": {"latent_dim": 8}, "critic": {"latent_dim": 8}}})

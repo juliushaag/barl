@@ -51,7 +51,6 @@ class ScalarValue:
 class DirectCritic(ScalarValue, QCritic):
   """Scalar Q regressed with MSE."""
 
-  kind = "critic"
   config_type = DirectCriticConfig
 
 
@@ -59,5 +58,4 @@ class DirectCritic(ScalarValue, QCritic):
 class EnsembleCritic(DirectCritic):
   """`DirectCritic` preset: two members, min-reduced (clipped double Q)."""
 
-  kind = "critic"
   config_type = EnsembleCriticConfig
