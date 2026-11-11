@@ -88,14 +88,6 @@ POLICY_SUPPLIED = {
 }
 
 
-def tiny_kwargs(name: str, **extra) -> dict:
-    # Legacy helper retained for introspection; new code builds typed configs
-    # via `typed_config`. Returns flat overrides only.
-    out = dict(TINY)
-    out.update(extra)
-    return out
-
-
 def typed_config(name: str, **extra):
   """Materialize a component's `config_type` defaults with overrides.
 
@@ -118,12 +110,6 @@ def typed_config(name: str, **extra):
   if unknown:
     raise KeyError(f"{name}: unknown config fields {sorted(unknown)}; "
                    f"available: {sorted(declared)}")
-  return merge(config_type(), values)
-
-
-def _merge_nested(config_type, values: dict):
-  """Apply overrides that may include nested dataclass fields."""
-  from barl_jax.config.serialization import merge
   return merge(config_type(), values)
 
 
@@ -201,10 +187,6 @@ def target_expectation(critic, target):
     if target.shape[-1] == 1:
         return target.squeeze(-1)
     return (target * critic.support_values()).sum(axis=-1)
-
-
-def params_of(module):
-    return jax.tree.leaves(nnx.state(module, nnx.Param))
 
 
 def finite(x) -> bool:

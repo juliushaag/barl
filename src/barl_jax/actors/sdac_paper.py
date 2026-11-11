@@ -106,7 +106,6 @@ class PaperDDPMActor(Actor):
   step index; `sample` carries exploration noise at evaluation too, as every
   actor here does."""
 
-  kind = "actor"
   config_type = PaperDDPMActorConfig
 
   def __init__(self, env_stats, config: PaperDDPMActorConfig, *, rngs: nnx.Rngs, **kwargs):

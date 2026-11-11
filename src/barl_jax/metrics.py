@@ -4,7 +4,7 @@
 module that computed it and collected with `nnx.pop` at the jit boundary.
 
 - **Keys come from the module hierarchy.** A critic writing
-  `self.metrics.dist("critic", pred)` lands at `critic/q/*` because the critic *is*
+  `self.metrics.dist("q", pred)` lands at `critic/q/*` because the critic *is*
   at `policy.critic`; nothing names itself.
 - **Nothing leaks a tracer.** `nnx.pop` hands the values back as a State the trainer
   returns from the traced step, which is how values leave a transform.

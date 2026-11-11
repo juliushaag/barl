@@ -6,11 +6,8 @@ from flax import nnx
 
 from barl_jax.components import Actor, Critic, frozen
 from barl_jax.config.schemas import ComponentsConfig, ModelConfig, register_model
-from barl_jax.critics.base import TargetConfig
 from barl_jax.critics.categorical import C51CriticConfig
-from barl_jax.critics.direct import EnsembleCriticConfig
 from barl_jax.networks.base import NetworkConfig
-from barl_jax.networks.mlp import MLPConfig
 from barl_jax.networks.simba import SimbaConfig
 from barl_jax.optimization import ActorOptim, ActorOptimConfig
 from barl_jax.policies.rl import PolicyConfig, RLPolicy
@@ -36,7 +33,6 @@ class DeterministicActor(ActorOptim, Actor):
   ascends Q at the noiseless mean. There is no entropy, so `generate_action`
   reports None."""
 
-  kind = "actor"
   config_type = DeterministicActorConfig
 
   def __init__(self, env_stats, config: DeterministicActorConfig, *, rngs: nnx.Rngs, **kwargs):

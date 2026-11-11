@@ -54,7 +54,6 @@ class DDPMActor(ActorOptim, Actor):
   The clipped x0 is the action -- there is no squash -- so candidates, buffer
   actions and samples all live in the same [-1, 1] box."""
 
-  kind = "actor"
   config_type = DDPMActorConfig
 
   def __init__(self, env_stats, config: DDPMActorConfig, *, rngs: nnx.Rngs, **kwargs):

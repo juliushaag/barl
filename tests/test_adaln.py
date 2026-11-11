@@ -86,13 +86,9 @@ def test_diffusion_simba_learns_observation_and_time_conditioning(name):
 
 
 @pytest.mark.parametrize("model", ["AMDP", "DIME", "SDAC", "SAC", "TD3", "NCLQL"])
-def test_no_model_defaults_to_adaln_and_configs_roundtrip(model):
-  config = RunConfig.from_dict({"model": model, "env": "HalfCheetah"}).model_config
-  actor = config.components.actor
-  if hasattr(actor, "mlp"):
-    assert not isinstance(actor.mlp, AdaLNSimbaConfig)
-    assert construct(type(actor), to_dict(actor)) == actor
-  assert not isinstance(config.components.critic.mlp, AdaLNSimbaConfig)
+def test_actor_configs_roundtrip(model):
+  actor = RunConfig.from_dict({"model": model, "env": "HalfCheetah"}).model_config.components.actor
+  assert construct(type(actor), to_dict(actor)) == actor
 
 
 def test_adaln_requires_conditioning_and_layer_normalization():

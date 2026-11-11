@@ -105,7 +105,7 @@ class Component:
   perturb one field with `c.config = replace(c.config, gamma=0.5)`.
 
   The owning Policy fans `before_step`/`after_step` out to every slot, and each
-  component has a `metrics` sink namespaced to its slot: `self.metrics.dist("critic",
+  component has a `metrics` sink namespaced to its slot: `self.metrics.dist("q",
   pred)` lands at `critic/q/*` without the component naming itself."""
 
   config_type = None

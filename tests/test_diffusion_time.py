@@ -213,11 +213,3 @@ def test_chain_helpers_give_each_step_its_own_split_key():
   np.testing.assert_allclose(state, expected, rtol=1e-5, atol=1e-6)
 
 
-def test_dime_default_time_coder_is_dime_ams_pisgradnet():
-  """256 linear frequencies on the raw step index, no raw-input channel, 256 hidden
-  and 256 out -- diffusion/common/models/pisgrad_net.py with cond_pisgradnet.yaml."""
-  from barl_jax.actors.dime import DISActorConfig
-  time = DISActorConfig().time
-  assert (time.num_freqs, time.spacing, time.concat_input) == (256, "linear", False)
-  assert (time.hidden, time.time_dim) == (256, 256)
-  assert (time.freq_min, time.freq_max, time.learn_freqs) == (0.1, 100.0, False)

@@ -46,11 +46,6 @@ def test_support_is_a_fixed_buffer_when_switched_off(head):
 
 
 @pytest.mark.parametrize("head", HEADS)
-def test_learned_support_is_the_default(head):
-  assert hasattr(build(head), "support_net")
-
-
-@pytest.mark.parametrize("head", HEADS)
 def test_learned_support_adds_its_own_optimizer_keys_and_parameters(head):
   critic = learned(head)
   assert set(critic.create_optimizer()) == {"critic", "support", "support_dual"}

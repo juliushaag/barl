@@ -50,10 +50,6 @@ class AutotuneRegulator(Component, nnx.Module):
   # config-set constant, not a silently-frozen-at-whatever-init-happened-to-be
   # one.
 
-  # A dual has no tier ladder -- `kind` exists so the resolver can tell a sized
-  # component from a non-sized one.
-  kind = "dual"
-
   # value() does not clamp: a floor on alpha injects a constant entropy bonus into
   # the Bellman target that a near-zero-reward env cannot outvote.
 
