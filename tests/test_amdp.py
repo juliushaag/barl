@@ -12,8 +12,8 @@ from barl_jax.metrics import Recorder
 
 
 def actor_for_test(*, steps=3, batch_rep=1, squash="ErfSquash"):
-    stats = make_env_stats(act_dim=1, act_low=np.array([-1.0], np.float32),
-                           act_high=np.array([1.0], np.float32), chunk_size=2)
+    stats = make_env_stats(act_dim=2, act_low=np.array([-1.0, -1.0], np.float32),
+                           act_high=np.array([1.0, 1.0], np.float32))
     return build("ScoreContinuousActor", env_stats=stats, max_steps=steps, batch_rep=batch_rep,
                  squash_cls=squash, q_score_max_norm=1e6, q_score_max_percentile=100.0)
 
@@ -49,18 +49,6 @@ def assert_tree_close(a, b, **kwargs):
         np.testing.assert_allclose(x, y, **kwargs)
 
 
-def test_scalar_alpha_and_equal_per_action_alphas_have_identical_actor_gradients():
-    actor = actor_for_test(batch_rep=3)
-    actor.field = LinearField(np.full((2, 2), 0.05), np.array([0.02, -0.01]))
-    critic = QuadraticCritic([[0.3, 0.1], [0.1, 0.4]])
-    obs = jnp.zeros((8, OBS_DIM))
-    key = jax.random.PRNGKey(4)
-    loss_grad = nnx.value_and_grad(lambda a, alpha: a.loss(obs, critic, alpha, key=key)["actor"])
-    scalar = loss_grad(actor, jnp.asarray(0.7))
-    vector = loss_grad(actor, jnp.full((2,), 0.7))
-    assert_tree_close(scalar, vector, rtol=1e-5, atol=1e-6)
-
-
 @pytest.mark.parametrize("squash", ["ErfSquash", "TanhSquash"])
 def test_loss_matches_manual_bridge_target(squash):
     """Recomputes `loss`'s bridge-sampled target from scratch -- same PRNG
@@ -81,7 +69,7 @@ def test_loss_matches_manual_bridge_target(squash):
     matrix = np.array([[0.3, 0.1], [0.1, 0.4]])
     critic = QuadraticCritic(matrix)
     obs = jnp.zeros((B, OBS_DIM))
-    alpha = jnp.array([0.4, 1.7])
+    alpha = jnp.asarray(0.7)
     key = jax.random.PRNGKey(7)
 
     # Mirror loss()'s own key splits and rollout exactly.
@@ -130,8 +118,7 @@ def test_loss_matches_manual_bridge_target(squash):
     np.testing.assert_array_equal(alpha_grad, jnp.zeros_like(alpha))
 
 
-@pytest.mark.parametrize("granularity", ["per_chunk", "per_action"])
-def test_amdp_policy_updates_with_chunked_alphas(granularity):
+def test_amdp_policy_updates():
     from test_policies import FakeEnv, batch
 
     from barl_jax.components import TRAINABLE
@@ -143,7 +130,6 @@ def test_amdp_policy_updates_with_chunked_alphas(granularity):
     run = RunConfig.from_dict({
         "model": "AMDP", "env": "HalfCheetah",
         "model_overrides": {
-            "params": {"chunk_size": 2, "alpha_granularity": granularity},
             "components": {
                 "actor": {"latent_dim": 8},
                 "critic": {"latent_dim": 8},
@@ -151,15 +137,12 @@ def test_amdp_policy_updates_with_chunked_alphas(granularity):
         },
     })
     policy = Policy.make("AMDP", FakeEnv(), run.model_config, env_stats=make_env_stats(), seed=0)
-    policy.entropy.log_alpha[...] = jnp.log(
-        jnp.array([0.4, 1.7]) if granularity == "per_action" else jnp.asarray(0.7))
+    policy.entropy.log_alpha[...] = jnp.log(jnp.asarray(0.7))
     before_actor = jax.tree.leaves(nnx.state(policy.actor, nnx.Param))
     before_alpha = np.asarray(policy.alpha())
     optimizer = nnx.Optimizer(policy, policy.build_optimizer(lr_schedule=None), wrt=TRAINABLE)
     graphdef, state = nnx.split((policy, optimizer))
     data = batch()
-    data["act"] = jnp.tile(data["act"], (1, 2))
-    data["horizon"] = jnp.full_like(data["horizon"], 2)
     for step in range(policy.policy_delay + 1):
         state, losses, _, _ = train_step(graphdef, state, data, (PRIMARY, DEBUG), jnp.asarray(step))
         assert all(np.isfinite(v) for v in losses.values())

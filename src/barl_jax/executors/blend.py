@@ -74,8 +74,8 @@ class AxisShuffleExecutorConfig(ExecutorConfig):
 
 @register_executor
 class AxisShuffleExecutor(ActionExecutor):
-  """Every `(batch, chunk, act_dim)` entry independently picks one of
-  `num_candidates` generated plans -- a per-axis recombination of all N, not
+  """Every `(batch, act_dim)` entry independently picks one of
+  `num_candidates` generated actions -- a per-axis recombination of all N, not
   any single candidate's action, like `MeanExecutor` but drawn rather than
   averaged."""
 

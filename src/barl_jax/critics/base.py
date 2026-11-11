@@ -82,7 +82,7 @@ class QCriticConfig(CriticOptimConfig):
 
 def n_step_discount(gamma, horizon, terminated, dtype):
   """(1 - terminated) * gamma**horizon, shaped (B, 1). `horizon` is the
-  executed plan length and is always passed explicitly."""
+  number of env steps the return spans and is always passed explicitly."""
   horizon = jnp.asarray(horizon, dtype).reshape(-1, 1)
   terminated = terminated.reshape(-1, 1).astype(dtype)
   return (1.0 - terminated) * jnp.power(jnp.asarray(gamma, dtype), horizon)
@@ -251,7 +251,7 @@ class QCritic(Critic):
                           self.config.ensemble.target_reduce)
 
   def n_step_inputs(self, chunk_return, terminated, horizon):
-    """`(reward-scaled chunk return, discount)`, both (B, 1)."""
+    """`(reward-scaled n-step return, discount)`, both (B, 1)."""
     chunk_return = chunk_return.reshape(-1, 1) * self.config.reward_scale
     return chunk_return, n_step_discount(self.config.gamma, horizon, terminated, chunk_return.dtype)
 
@@ -268,7 +268,7 @@ class QCritic(Critic):
               entropy_bonus=0.0, *, key=None) -> dict:
     """chunk_return: (B,) return already discounted within the executed
     horizon; terminated: (B,) true termination (never truncation); horizon:
-    (B,) executed plan length; entropy_bonus: (B, 1) or 0.0, added to the
+    (B,) env steps the return spans; entropy_bonus: (B, 1) or 0.0, added to the
     bootstrap before discounting."""
     items = [(obs, action, self._level(obs, None))]
     if self.noise is not None:

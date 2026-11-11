@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from barl_jax.components import Actor, Buffer, Critic, frozen
+from barl_jax.components import Actor, Buffer, Critic, entropy_regularized_loss
 from barl_jax.config.schemas import ComponentsConfig, ModelConfig, register_model
 from barl_jax.critics.categorical import C51CriticConfig
 from barl_jax.networks import gaussian
@@ -25,7 +25,7 @@ class DISActorConfig(ActorOptimConfig):
   latent_dim: int = 128
   layers: int = 3
   mlp: NetworkConfig = field(default_factory=lambda: SimbaConfig())
-  
+
   time: TimeEmbeddingConfig = field(default_factory=lambda: FourierTimeConfig(
     time_dim=256, num_freqs=256, hidden=256, concat_input=False, spacing="linear"))
   squash_cls: str = "TanhSquash"
@@ -101,9 +101,9 @@ class DISActor(ActorOptim, Actor):
 
     hold = (lambda v: nnx.Param(v)) if self.config.learn_dt else (lambda v: Buffer(v))
     self.dt_raw = hold(jnp.full((1,), _inv_softplus(self.config.dt_init), jnp.float32))
-    
+
     hold = (lambda v: nnx.Param(v)) if self.config.learn_friction else (lambda v: Buffer(v))
-    friction_shape = (self.plan_dim,) if self.config.per_dim_friction else (1,)
+    friction_shape = (self.action_dim,) if self.config.per_dim_friction else (1,)
     self.friction_raw = hold(jnp.full(friction_shape, _inv_softplus(self.config.friction_init), jnp.float32))
 
     i = jnp.arange(self.config.num_steps, dtype=jnp.float32)
@@ -114,7 +114,7 @@ class DISActor(ActorOptim, Actor):
     latent_dim, layers = config.latent_dim, config.layers
 
     self.field = TimeConditionedField(
-      self.obs_dim, self.plan_dim, latent_dim=latent_dim, layers=layers,
+      self.obs_dim, self.action_dim, latent_dim=latent_dim, layers=layers,
       time=config.time, mlp=config.mlp, rngs=rngs)
 
     self.field.zero_init_head()
@@ -136,11 +136,11 @@ class DISActor(ActorOptim, Actor):
     return jnp.clip(u, -self.config.out_clip, self.config.out_clip)
 
   def generate_action(self, obs, *, critic: Critic = None, key=None, squash=True):
-   
+
     key = self.next_key(key)
     key, prior_key = jax.random.split(key)
 
-    x = self.config.prior_std * jax.random.normal(prior_key, (obs.shape[0], self.plan_dim), jnp.float32)
+    x = self.config.prior_std * jax.random.normal(prior_key, (obs.shape[0], self.action_dim), jnp.float32)
 
     def euler_step(x, i, step_key):
       eta, scale = self.step_coef(i)
@@ -148,18 +148,18 @@ class DISActor(ActorOptim, Actor):
       x_new    = fwd_mean + scale * jax.random.normal(step_key, x.shape, jnp.float32)
 
       bwd_mean = x_new + eta * self.prior_score(x_new)
-     
-      return x_new, self.chunk_sum(gaussian.log_prob(x, bwd_mean, scale)) \
-                    - self.chunk_sum(gaussian.log_prob(x_new, fwd_mean, scale))
+
+      return x_new, gaussian.log_prob(x, bwd_mean, scale).sum(axis=-1) \
+                    - gaussian.log_prob(x_new, fwd_mean, scale).sum(axis=-1)
 
     X, entropy =  controlled_sde(euler_step, x, self.config.num_steps, key,
-                          aux=-self.chunk_sum(gaussian.log_prob(x, 0.0, self.config.prior_std)))
+                          aux=-gaussian.log_prob(x, 0.0, self.config.prior_std).sum(axis=-1))
 
     if squash:
-      entropy = entropy + self.chunk_sum(self.squash.log_abs_det_jacobian(X))
+      entropy = entropy + self.squash.log_abs_det_jacobian(X).sum(axis=-1)
       X = self.squash(X)
 
-    return X.reshape(obs.shape[0], self.chunk_size, self.action_dim), entropy
+    return X, entropy
 
   def derived(self) -> dict:
     return {"dt_0": float(jax.nn.softplus(self.dt_raw[...])[0] * self.dt_scale[...][0]),
@@ -167,10 +167,7 @@ class DISActor(ActorOptim, Actor):
             "prior_var": self.config.prior_std**2}
 
   def loss(self, obs, critic: "Critic", alpha, *, key=None):
-    action, entropy = self.generate_action(obs, key=key)
-    q = frozen(critic).value(obs, action.reshape(action.shape[0], -1))
-    bonus = (jax.lax.stop_gradient(alpha) * entropy).sum(axis=-1, keepdims=True)
-    return {"actor": -(q + bonus).mean()}
+    return entropy_regularized_loss(self, obs, critic, alpha, key=key)
 
 
 @register_policy

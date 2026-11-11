@@ -418,21 +418,22 @@ def test_disk_budget_rejects_a_save_with_insufficient_free_space(tmp_path, monke
   _check_disk_budget(tmp_path, required_bytes=0)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("utd_ratio", [0.5, 2.0])
-def test_chunked_training_counts_primitive_steps(tmp_path, monkeypatch, utd_ratio):
+def test_training_counts_env_and_grad_steps(tmp_path, monkeypatch, utd_ratio):
   import barl_jax.logger as logging
   family = ToyFamily()
   monkeypatch.setattr(Environment, "make", lambda name: family)
   monkeypatch.setattr(logging, "make_logger", lambda kind, *a, **kw: MemoryLogger(*a, **kw))
   monkeypatch.setattr(trainer, "warmup", lambda *args: {})
   cfg = run_config(tmp_path).replace(total_env_steps=8, num_envs=2, rollout_steps=2)
-  cfg = with_params(cfg, chunk_size=4, utd_ratio=utd_ratio)
+  cfg = with_params(cfg, utd_ratio=utd_ratio)
   run = trainer.setup(cfg, 1)
   trainer.train(run)
   assert run.progress["env_steps"] == 8
   assert run.progress["grad_steps"] == round(8 * utd_ratio)
-  assert run.buffer.min_transitions() == 2
-  assert np.array_equal(run.buffer.seeds[0]._fields["horizon"][:2], [4, 4])
+  assert run.buffer.min_transitions() == 8
+  assert np.array_equal(run.buffer.seeds[0]._fields["horizon"][:8], np.ones(8))
 
 
 def test_saved_spec_roundtrips_through_policy_checkpoint(tmp_path):
@@ -445,6 +446,45 @@ def test_saved_spec_roundtrips_through_policy_checkpoint(tmp_path):
     np.testing.assert_array_equal(a, b)
 
 
+def _legacy_policy_checkpoint(tmp_path, **legacy_params):
+  import json
+  original = make_policy()
+  save_policy(original, tmp_path / "policy")
+  meta_path = tmp_path / "policy" / "meta.json"
+  meta = json.loads(meta_path.read_text())
+  meta["spec"]["model"]["params"].update(legacy_params)
+  meta_path.write_text(json.dumps(meta))
+  return original
+
+
+def test_checkpoint_with_removed_config_keys_loads_with_a_warning(tmp_path):
+  original = _legacy_policy_checkpoint(tmp_path, chunk_size=1, alpha_granularity="per_chunk")
+  with pytest.warns(UserWarning, match=r"ignoring unknown keys \['alpha_granularity', 'chunk_size'\]"):
+    loaded = load_policy(tmp_path / "policy", ToyEnv(), ToyFamily().get_env_stats(ToyEnv()))
+  for a, b in zip(jax.tree.leaves(nnx.state(original)), jax.tree.leaves(nnx.state(loaded))):
+    if jax.dtypes.issubdtype(a.dtype, jax.dtypes.prng_key):
+      a, b = jax.random.key_data(a), jax.random.key_data(b)
+    np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("legacy", [{"chunk_size": 4}, {"alpha_granularity": "per_action"}])
+def test_checkpoint_that_used_chunking_is_rejected_clearly(tmp_path, legacy):
+  _legacy_policy_checkpoint(tmp_path, **legacy)
+  with pytest.raises(ValueError, match="removed"):
+    load_policy(tmp_path / "policy", ToyEnv(), ToyFamily().get_env_stats(ToyEnv()))
+
+
+def test_unknown_config_keys_still_raise_when_not_loading_a_checkpoint():
+  with pytest.raises(KeyError, match="chunk_size"):
+    RunConfig.from_dict({"model": "SAC", "env": "HalfCheetah",
+                         "model_overrides": {"params": {"chunk_size": 1}}})
+  with pytest.warns(UserWarning, match="chunk_size"):
+    cfg = RunConfig.from_dict({"model": "SAC", "env": "HalfCheetah", "obsolete": 1,
+                               "model_overrides": {"params": {"chunk_size": 1}}}, strict=False)
+  assert cfg.model == "SAC"
+
+
+@pytest.mark.slow
 def test_prefetched_batches_never_run_the_replay_rng_ahead_of_a_save(tmp_path, monkeypatch):
   import barl_jax.logger as logging
   family = ToyFamily()

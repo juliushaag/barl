@@ -92,7 +92,7 @@ class PaperDDPMActor(Actor):
     Rollout and Bellman bootstrap share this sampler.
   * `log_alpha` is a scalar owned by the actor and trained under its own
     optimizer key; its loss depends on alpha alone (the entropy of the added
-    noise against `-target_entropy_scale * plan_dim`), so it is a fixed
+    noise against `-target_entropy_scale * action_dim`), so it is a fixed
     schedule: alpha falls from `alpha_init` towards the value matching the
     target.
   * Loss: a fresh policy action is diffused to a random step, `num_candidates`
@@ -115,7 +115,7 @@ class PaperDDPMActor(Actor):
     if problems:
       raise ValueError(f"{type(self).__name__}: " + "; ".join(problems))
     self.field = TimeConditionedField(
-      self.obs_dim, self.plan_dim, latent_dim=config.latent_dim, layers=config.layers,
+      self.obs_dim, self.action_dim, latent_dim=config.latent_dim, layers=config.layers,
       time=config.time, mlp=config.mlp, rngs=rngs)
     self.log_alpha = nnx.Param(jnp.asarray(math.log(config.alpha_init), jnp.float32))
     self.coef = Buffer(jnp.asarray(diffusion_coefficients(
@@ -140,8 +140,8 @@ class PaperDDPMActor(Actor):
     the x0 estimate clipped to the box at every step."""
     steps, B = self.config.num_steps, obs.shape[0]
     x_key, noise_key = jax.random.split(key)
-    x = self.config.prior_scale * jax.random.normal(x_key, (B, self.plan_dim), jnp.float32)
-    noise = jax.random.normal(noise_key, (steps, B, self.plan_dim), jnp.float32)
+    x = self.config.prior_scale * jax.random.normal(x_key, (B, self.action_dim), jnp.float32)
+    noise = jax.random.normal(noise_key, (steps, B, self.action_dim), jnp.float32)
     coef = self.coef[...]
 
     def body(x, step):
@@ -165,12 +165,12 @@ class PaperDDPMActor(Actor):
       action = candidates[jnp.argmax(q, axis=0), jnp.arange(B)]
     std = self.noise_alpha() * self.config.noise_scale
     action = action + std * jax.random.normal(noise_key, action.shape, action.dtype)
-    return self.to_plan(jnp.clip(action, -1.0, 1.0)), None
+    return jnp.clip(action, -1.0, 1.0), None
 
   # ---- reverse-sampling score matching --------------------------------------
   def loss(self, obs, critic, alpha, *, key=None):
     """`alpha` is the policy's (unused) dual; this actor's own is `log_alpha`."""
-    cfg, B, K, d = self.config, obs.shape[0], self.config.num_candidates, self.plan_dim
+    cfg, B, K, d = self.config, obs.shape[0], self.config.num_candidates, self.action_dim
     keys = jax.random.split(self.next_key(key), 4)
     coef = self.coef[...]
 

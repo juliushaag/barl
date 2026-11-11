@@ -29,14 +29,8 @@ class AutotuneRegulator(Component, nnx.Module):
 
   `target` is always the owning Policy's own computed value, never a
   config/tunable -- so it stays a real keyword argument and is not a `Config`
-  declaration. It is either a plain float (one alpha for the whole chunked plan -- SAC/AMDP/
-  DIME's default, `target=self.chunk_size * self.action_dim *
-  self.entropy_scale`, entropy being joint over the whole plan) or a
-  `(chunk_size,)` array (one alpha per chunk position -- `MaxEntRLPolicy`'s
-  `alpha_granularity: per_action`, `target=self.action_dim * self.entropy_scale`
-  per position). `log_alpha` just takes `target`'s shape, so this class carries
-  no granularity switch of its own -- the owning Policy decides by what shape
-  of `target` it passes in, and `value()`/`loss()` broadcast either way.
+  declaration. It is a plain float (SAC/AMDP/DIME: `target=self.action_dim *
+  self.entropy_scale`).
 
   The optimizer knobs come from `DualOptimConfig` (a higher LR)."""
 
@@ -62,16 +56,12 @@ class AutotuneRegulator(Component, nnx.Module):
     super().__init__(env_stats, config, **kwargs)
 
     target = jnp.asarray(target, jnp.float32)
-    # 0-dim, not shape (1,), for a scalar target: a singleton dimension makes
-    # every product with alpha non-scalar, and jax.grad rejects a non-scalar
-    # loss. A (chunk_size,) target gives log_alpha the same
-    # shape -- one Lagrange multiplier per chunk position instead of one for
-    # the whole plan.
-    self.log_alpha = nnx.Param(jnp.full(target.shape, math.log(config.alpha_init), jnp.float32))
+    # 0-dim, not shape (1,): a singleton dimension makes every product with
+    # alpha non-scalar, and jax.grad rejects a non-scalar loss.
+    self.log_alpha = nnx.Param(jnp.asarray(math.log(config.alpha_init), jnp.float32))
 
-    # A bare Python float for the scalar case (unchanged from before -- kept
-    # out of the pytree entirely), a plain jnp array for the vector case.
-    self.target_value = float(target) if target.ndim == 0 else target
+    # A bare Python float, kept out of the pytree entirely.
+    self.target_value = float(target)
 
   def value(self):
     return jnp.exp(self.log_alpha[...])
@@ -80,17 +70,11 @@ class AutotuneRegulator(Component, nnx.Module):
     value = jax.lax.stop_gradient(value)
     alpha = self.value()
     target = self.target_value
-    # Elementwise product before the mean, not `alpha * (value - target).mean()`:
-    # identical for a scalar alpha (a scalar factors out of a mean either way),
-    # but for a (chunk_size,) alpha this is what gives log_alpha_i a gradient
-    # from position i's own discrepancy rather than from the discrepancy
-    # averaged across every position.
-    loss = (alpha * (value - target)).mean()
+    loss = alpha * (value - target).mean()
 
     alpha_sg = jax.lax.stop_gradient(alpha)
-    log = self.metrics.dist if alpha_sg.ndim else self.metrics.scalar
-    log("alpha", alpha_sg)
-    log("target", target)
+    self.metrics.scalar("alpha", alpha_sg)
+    self.metrics.scalar("target", target)
     self.metrics.dist("value", value)
     self.metrics.dist("value_scaled", value * alpha_sg)
     return {f"{self.slot}_alpha": loss}

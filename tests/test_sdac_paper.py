@@ -50,7 +50,7 @@ def test_actions_stay_in_the_box_with_and_without_a_critic(obs, key):
   a = built("PaperDDPMActor")
   for critic in (None, LinearCritic()):
     action, entropy = a.generate_action(obs, critic=critic, key=key)
-    assert action.shape == (BATCH, a.chunk_size, ACT_DIM) and finite(action)
+    assert action.shape == (BATCH, ACT_DIM) and finite(action)
     assert jnp.all(jnp.abs(action) <= 1.0) and entropy is None
 
 
@@ -59,9 +59,9 @@ def test_best_of_n_prefers_the_higher_value_candidate(key):
   big = jnp.tile(jax.random.normal(jax.random.PRNGKey(5), (1, a.obs_dim)), (512, 1))
   first = lambda n: dataclasses.replace(a.config, num_particles=n)
   a.config = first(1)
-  one = a.generate_action(big, critic=LinearCritic(), key=key)[0][:, 0, 0].mean()
+  one = a.generate_action(big, critic=LinearCritic(), key=key)[0][:, 0].mean()
   a.config = first(32)
-  best = a.generate_action(big, critic=LinearCritic(), key=key)[0][:, 0, 0].mean()
+  best = a.generate_action(big, critic=LinearCritic(), key=key)[0][:, 0].mean()
   assert best > one
 
 
@@ -81,7 +81,7 @@ def test_alpha_loss_descends_towards_the_target_entropy():
   """loss = log_alpha * (H(alpha) - target): alpha falls above the target and rises below it,
   and the gradient vanishes where the noise entropy equals the target."""
   a = build("PaperDDPMActor")
-  critic, cfg, d = build("DirectCritic"), a.config, a.plan_dim
+  critic, cfg, d = build("DirectCritic"), a.config, a.action_dim
   obs = jnp.zeros((2, a.obs_dim))
 
   def grad_at(alpha):

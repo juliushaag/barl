@@ -167,15 +167,15 @@ its own typed config declaring only the fields it uses:
 - `DirectExecutor` (the default) -- one unchanged inference call, bit-
   identical to not passing an executor at all; its config has no
   `num_candidates` field at all, so it cannot be pointed at one.
-- `MeanExecutor` (`num_candidates`) -- samples `num_candidates` action plans
+- `MeanExecutor` (`num_candidates`) -- samples `num_candidates` actions
   and averages them elementwise. Continuous (box) action spaces only; can
   land between modes of a multimodal policy, so treat it as a research
   strategy, not an automatic improvement.
 - `MedianExecutor` (`num_candidates`) -- like `MeanExecutor`, but the
   elementwise median: unmoved by a single wild candidate the way an average
   would be. Continuous action spaces only.
-- `AxisShuffleExecutor` (`num_candidates`) -- samples `num_candidates` plans
-  and, independently for every `(batch, chunk, act_dim)` entry, takes the
+- `AxisShuffleExecutor` (`num_candidates`) -- samples `num_candidates` actions
+  and, independently for every `(batch, act_dim)` entry, takes the
   value from a randomly chosen candidate -- a per-axis recombination of all
   N, not any one candidate's action. Needs no critic; works for discrete
   action spaces too (it only ever copies a real candidate's value, never
@@ -229,7 +229,7 @@ existing "environment episodes restart" semantics.
   `C51Critic`) supplies only its representation-specific target and regression.
   `SLOT_OBJECTIVES` validates compatibility before construction.
 - `optimization.py` assembles parameter ownership, update cadence and schedules.
-- `collection.py` owns environment/chunk state and emits transitions into an
+- `collection.py` owns environment state and emits transitions into an
   injected sink. `replay.py` owns replay storage and independent sampling RNGs.
 - `evaluation.py` evaluates action providers; `multiseed.py` stacks independent
   policies and optimizers. `trainer.py` coordinates their lifecycle.
@@ -267,9 +267,11 @@ policy = Policy.make("SAC", env, run.model_config, env_stats=env_stats)
 
 `RunConfig.model_config` is the complete typed model (policy params and component
 configs). Policies retain it as `policy.config`; it is frozen, so later config
-changes cannot affect their components. `chunk_size` is a policy param
-(`model.params.chunk_size`), not a run key. Import contracts, checkpoint functions and inference utilities from
-their owning modules. Older checkpoint formats are rejected explicitly.
+changes cannot affect their components. Import contracts, checkpoint functions and inference utilities from
+their owning modules. Older checkpoint formats are rejected explicitly, except that
+saved configs naming keys this version no longer has (for example the removed
+action-chunking params `chunk_size` and `alpha_granularity`) still load: the keys
+are dropped with a warning. A checkpoint trained with `chunk_size > 1` cannot be loaded.
 
 Observation normalization now updates running moments from each training batch,
 before the objective runs. Inference reads those moments without updating them.
@@ -306,8 +308,7 @@ seed count and replay capacity must match. Output paths, logging/evaluation
 cadences, `logger:`, and `resume_every`/`resume_keep` may change. Saved model
 snapshots take precedence over current defaults.
 
-Environment episodes restart on resume. Partial action chunks are discarded;
-completed replay transitions remain intact. This is training-state continuation,
+Environment episodes restart on resume. Completed replay transitions remain intact. This is training-state continuation,
 not bit-identical simulator trajectory continuation. A failed iteration retains
 the last completed resume generation; `final` policy weights may be newer.
 Full replay checkpoints can be large, so account for their storage and I/O cost --

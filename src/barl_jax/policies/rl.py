@@ -31,14 +31,11 @@ from barl_jax.optimization import gated_losses
 from barl_jax.policy import Policy
 from barl_jax.registration import register_policy
 
-ALPHA_GRANULARITIES = ("per_chunk", "per_action")
-
 
 @dataclass(frozen=True)
 class PolicyConfig:
   """Params every off-policy actor-critic policy owns."""
 
-  chunk_size: int = 1
   normalize_obs: bool = False
   policy_delay: int = 1
   random_steps: int = 5000
@@ -52,7 +49,6 @@ class PolicyConfig:
 class MaxEntPolicyConfig(PolicyConfig):
   entropy_scale: float = -1.0
   entropy_in_target: bool = True
-  alpha_granularity: str = "per_chunk"
 
 
 @register_policy
@@ -82,8 +78,7 @@ class RLPolicy(Policy):
     super().__init__(env, *args, **kwargs)
     assert isinstance(env.action_space, gym.spaces.Box)
 
-    chunked = self.env_stats.derive(act_dim=self.env_stats["chunked_act_dim"])
-    self.critic: QCritic = self.build_component("critic", QCritic, env_stats=chunked)
+    self.critic: QCritic = self.build_component("critic", QCritic)
     self.actor: ActionSampler = self.build_component("actor", self.actor_cls)
     # No cadence/optimizer-key guard here: `self.optimizer_cadence()` is a
     # virtual call, and a MaxEntRLPolicy subclass hasn't built `self.entropy`
@@ -131,14 +126,10 @@ class RLPolicy(Policy):
 
   # ---------------------------------------------------------------------
 
-  @property
-  def discount(self):
-    return self.critic.config.gamma
-
   def train_step(self, batch):
     obs          = self.normalize_observations(batch["obs"])
     next_obs     = self.normalize_observations(batch["next_obs"])
-    
+
     action       = batch["act"]
     chunk_return = batch["chunk_return"]
     terminated   = batch["term"]
@@ -147,19 +138,12 @@ class RLPolicy(Policy):
     losses = {}
     alpha  = self.alpha()
 
-    # Every draw this step descends from one key, split here: the bootstrap
-    # sample and the actor losses must not share a stream, and a step's
-    # randomness should be readable off train_step rather than hidden in each
-    # component's `rngs`. keys[2] is retired -- the explore term shares the
-    # actor's stream now (one best-of-N) -- but the split stays 3-way so the
-    # other two streams are unchanged.
     actor_keys = tuple(sorted(self.actor.create_optimizer()))
     # Critic-only samplers retain the original bootstrap/smoothing split.
     keys = jax.random.split(self.rngs.noise(), 3 if actor_keys else 2)
 
     next_action, entropy = jax.lax.stop_gradient(
       self.actor.generate_action(next_obs, critic=self.critic, key=keys[0]))
-    next_action = next_action.reshape(next_action.shape[0], -1)
 
     losses.update(self.critic.td_loss(
       obs, action, next_obs, next_action, chunk_return, terminated, horizon,
@@ -174,8 +158,7 @@ class RLPolicy(Policy):
         actor_keys, self.actor, self.critic))
     losses.update(self.dual_loss(entropy))
 
-    self.actor.metrics.vec("action", next_action.reshape(
-      next_action.shape[0], self.actor.chunk_size, self.actor.action_dim), limit=1.0)
+    self.actor.metrics.vec("action", next_action, limit=1.0)
     if entropy is not None:
       self.actor.metrics.dist("entropy", entropy)
 
@@ -183,7 +166,7 @@ class RLPolicy(Policy):
 
   def inference_step(self, observation, step_info=None, key=None):
     obs = self.normalize_observations(observation)
-    return self.action_chunk(self.actor.sample(obs, critic=self.critic, key=key)), {}
+    return self.actor.sample(obs, critic=self.critic, key=key), {}
 
   # ---- Best-of-N scoring (barl_jax.executors) --------------------------
 
@@ -191,51 +174,28 @@ class RLPolicy(Policy):
   def supports_bon(self):
     return self.critic.supports_bon
 
-  def score(self, observation, action_chunk):
+  def score(self, observation, action):
     """`critic.value()` at the online critic, reduced per
-    `ensemble.value_reduce`. Flattens the action plan the
-    same way `train_step` flattens `next_action` before handing it to the
-    critic."""
+    `ensemble.value_reduce`."""
     obs = self.normalize_observations(observation)
-    flat_action = action_chunk.reshape(action_chunk.shape[0], -1)
-    return self.critic.value(obs, flat_action)
+    return self.critic.value(obs, action)
 
 
 @register_policy
 class MaxEntRLPolicy(RLPolicy):
   """`RLPolicy` plus an automatic entropy dual -- SAC, AMDP and DIME all
-  resolve here. `entropy_in_target` toggles the Bellman target's entropy bonus.
-
-  `alpha_granularity` is the other fork: `"per_chunk"` (default) trains one
-  alpha for the whole chunked plan, exactly as before; `"per_action"` trains
-  one alpha per chunk position, each held at its own per-action target entropy
-  `action_dim * entropy_scale`. Every actor's `generate_action` already reports
-  entropy decomposed per chunk position (`(B, chunk_size)`), so the only thing that changes between the two
-  is `target`'s shape -- `AutotuneRegulator` follows it -- and whether the dual
-  sees that decomposition summed to one number or as-is."""
+  resolve here. `entropy_in_target` toggles the Bellman target's entropy bonus."""
 
   SLOTS = ("critic", "actor", "entropy")
   SLOT_OBJECTIVES = {"critic": "td"}
 
   def __init__(self, env: gym.Env, *args, **kwargs):
     super().__init__(env, *args, **kwargs)
-    params = self.params
-    target = (jnp.full((self.chunk_size,), self.action_dim * params.entropy_scale, jnp.float32)
-              if params.alpha_granularity == "per_action"
-              else self.chunk_size * self.action_dim * params.entropy_scale)
     self.entropy: AutotuneRegulator = self.build_component(
-      "entropy", AutotuneRegulator, target=target)
+      "entropy", AutotuneRegulator, target=self.action_dim * self.params.entropy_scale)
     assert set(self.optimizer_cadence()) <= set(self.create_optimizer()), (
       f"{self.model_name}: optimizer_cadence names a key create_optimizer() "
       f"doesn't -- build_optimizer's cadence.get(key, 1) would drop it silently.")
-
-  @classmethod
-  def config_problems(cls, params) -> list[str]:
-    problems = super().config_problems(params)
-    if params.alpha_granularity not in ALPHA_GRANULARITIES:
-      problems.append(f"alpha_granularity={params.alpha_granularity!r}: "
-                      f"must be one of {ALPHA_GRANULARITIES}")
-    return problems
 
   def optimizer_cadence(self) -> dict:
     return {**super().optimizer_cadence(),
@@ -245,16 +205,10 @@ class MaxEntRLPolicy(RLPolicy):
     return self.entropy.value()
 
   def target_entropy_bonus(self, alpha, entropy):
-    """`entropy` is `(B, chunk_size)`; summing the chunk axis after weighting by
-    `alpha` (scalar or `(chunk_size,)`) restores the single `(B, 1)` bonus the
-    Bellman target wants, whichever granularity produced it."""
+    """`entropy` is `(B,)`; the Bellman target wants the `(B, 1)` bonus."""
     if not self.params.entropy_in_target:
       return 0.0
-    return jax.lax.stop_gradient((alpha * entropy).sum(axis=-1, keepdims=True))
+    return jax.lax.stop_gradient(alpha * entropy)[:, None]
 
   def dual_loss(self, entropy) -> dict:
-    # per_chunk's target is one number for the whole plan, so the dual must see
-    # entropy summed the same way; per_action's target is per position, so the
-    # per-position decomposition goes in as-is.
-    value = entropy if self.params.alpha_granularity == "per_action" else entropy.sum(axis=-1, keepdims=True)
-    return self.entropy.loss(value)
+    return self.entropy.loss(entropy)

@@ -62,29 +62,11 @@ class Actor:
     def __init__(self, actions):
         self._actions = np.asarray(actions, np.float32)
         self.action_dim = ACT_DIM
-        self.chunk_size = 1
 
     def inference_fn(self):
         def infer(obs, key):
             return jax.numpy.asarray(
-                np.broadcast_to(self._actions, (obs.shape[0], 1, ACT_DIM))), {}
-        return infer
-
-
-class ChunkActor:
-    """One scripted action chunk per refill, broadcast across the batch."""
-
-    def __init__(self, chunks):
-        self._chunks = [np.asarray(c, np.float32) for c in chunks]
-        self._i = 0
-        self.action_dim = ACT_DIM
-        self.chunk_size = len(self._chunks[0])
-
-    def inference_fn(self):
-        def infer(obs, key):
-            chunk = self._chunks[min(self._i, len(self._chunks) - 1)]
-            self._i += 1
-            return jax.numpy.asarray(np.broadcast_to(chunk, (obs.shape[0], *chunk.shape))), {}
+                np.broadcast_to(self._actions, (obs.shape[0], ACT_DIM))), {}
         return infer
 
 
@@ -139,19 +121,3 @@ def test_a_finite_action_is_counted_as_clean():
 
     assert all(r["act_nonfinite"] == 0 for r in records)
     assert all(r["n_act"] == EPISODE_LEN * ACT_DIM for r in records)
-
-
-def test_eval_executes_chunked_actions_step_by_step():
-    env = RecordingVectorEnv(1)
-    chunks = [
-        [[0.0, 0.1, 0.2], [0.3, 0.4, 0.5], [0.6, 0.7, 0.8]],
-        [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6], [-0.7, -0.8, -0.9]],
-    ]
-    records = run_episodes(ChunkActor(chunks), env, n=1, render=False)
-
-    seen = np.stack(env.seen)[:, 0]
-    expected = np.asarray(chunks[0][:3] + chunks[1][:2], np.float32) * env.act_scale + env.act_bias
-    assert np.allclose(seen, expected)
-    assert records[0]["chunk_size"] == 3
-    assert records[0]["chunk_refills"] == 2
-    assert records[0]["chunk_waste_frac"] == pytest.approx(1 / 6)

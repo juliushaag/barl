@@ -30,7 +30,7 @@ class ExecutorConfig:
 
 
 class ActionExecutor(ABC):
-  """`select()` is the operation: `(observation, key) -> (action_chunk,
+  """`select()` is the operation: `(observation, key) -> (action,
   extras)` via a candidate-generating `infer_step` and, for executors that
   need one, a critic-backed `score_fn` (see `needs_score`). Every field of
   `config` is a compile-time choice -- state, observations and keys stay
@@ -54,10 +54,10 @@ class ActionExecutor(ABC):
   @abstractmethod
   def select(self, infer_step: Callable, score_fn: Optional[Callable],
             observation, key):
-    """`infer_step`: pure `(observation, key) -> (action_chunk, extras)`.
-    `score_fn`: pure `(observation, action_chunk) -> score`, non-None iff
-    `needs_score`. Returns `(action_chunk, extras)`; `action_chunk` is always
-    `(batch, chunk, act_dim)`."""
+    """`infer_step`: pure `(observation, key) -> (action, extras)`.
+    `score_fn`: pure `(observation, action) -> score`, non-None iff
+    `needs_score`. Returns `(action, extras)`; `action` is always
+    `(batch, act_dim)`."""
     ...
 
   @property
@@ -101,7 +101,7 @@ def executor_from_config(config) -> ActionExecutor:
 
 
 def select_action(policy, executor_config, observation, key):
-  """`(action_chunk, extras)` for `policy` under an executor config, or the
+  """`(action, extras)` for `policy` under an executor config, or the
   policy's own action when `executor_config` is None. Traced inside jit."""
   infer_step = lambda obs, k: policy.inference_step(obs, key=k)
   if executor_config is None:
@@ -124,7 +124,7 @@ def _candidate_keys(key, n: int):
 
 
 def _generate(infer_step: Callable, observation, key, n: int):
-  """`(N, batch, chunk, act_dim)` candidate plans and their extras.
+  """`(N, batch, act_dim)` candidate actions and their extras.
   `infer_step` is vmapped over N independent keys with the observation shared
   (broadcast, not batched again), so normalization/BatchNorm running stats
   are read once per call, not perturbed per candidate."""

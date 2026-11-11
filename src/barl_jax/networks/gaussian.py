@@ -2,11 +2,7 @@
 distrax/TFP: distrax's Transformed+Tanh has a long-standing NaN log_prob issue
 that lands exactly on SAC, and neither library is otherwise needed.
 
-Elementwise, not reduced: every caller sums it themselves, within whatever
-axis their own shape convention wants -- SAC's squash correction sums the whole
-plan_dim before negating into an entropy, DIME/AMDP's path weights sum within
-each chunk position's action_dim block (`Component.chunk_sum`) so their
-per-chunk-position alpha reads the right per-position quantity."""
+Elementwise, not reduced: every caller sums it over the action axis itself."""
 
 import math
 

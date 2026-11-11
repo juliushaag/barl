@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 from flax import nnx
 
-from barl_jax.components import Actor, Buffer, Critic, frozen
+from barl_jax.components import Actor, Buffer, Critic, entropy_regularized_loss
 from barl_jax.config.schemas import ComponentsConfig, ModelConfig, register_model
 from barl_jax.critics.categorical import C51CriticConfig
 from barl_jax.networks import gaussian
@@ -41,13 +41,12 @@ class StochasticActor(ActorOptim, Actor):
 
     low, high = env_stats.get("act_low"), env_stats.get("act_high")
     scale = 1.0 if low is None else (np.asarray(high) - np.asarray(low)) / 2
-    scale = np.tile(np.asarray(scale, dtype=np.float32).reshape(-1),
-                    self.chunk_size).reshape(-1)
+    scale = np.asarray(scale, dtype=np.float32).reshape(-1)
     self.log_act_scale = Buffer(jnp.log(jnp.asarray(scale, jnp.float32)))
 
     latent_dim, layers = config.latent_dim, config.layers
 
-    self.net = config.mlp.build(self.obs_dim, 2 * self.plan_dim, latent_dim, layers, rngs=rngs)
+    self.net = config.mlp.build(self.obs_dim, 2 * self.action_dim, latent_dim, layers, rngs=rngs)
 
   def dist(self, s):
     out = self.net((s,)).astype(jnp.float32)
@@ -62,28 +61,22 @@ class StochasticActor(ActorOptim, Actor):
     return self.squash(x), x, (mean, std)
 
   def generate_action(self, s, *, critic: Critic = None, key=None):
-    action_flat, x, (mean, std) = self.rsample(s, key)
+    action, x, (mean, std) = self.rsample(s, key)
 
     log_prob = (gaussian.log_prob(x, mean, std)
-                - self.squash.log_abs_det_jacobian(x, action_flat)
+                - self.squash.log_abs_det_jacobian(x, action)
                 - self.log_act_scale[...])
 
-    entropy = -self.chunk_sum(log_prob)
-    return self.to_plan(action_flat), entropy
+    return action, -log_prob.sum(axis=-1)
 
   def sample(self, s, *, critic: Critic = None, key=None):
-    action_flat, _, _ = self.rsample(s, key)
-    return self.to_plan(action_flat)
+    return self.rsample(s, key)[0]
 
-  
+
   def loss(self, obs, critic: "Critic", alpha, *, key=None):
-  
-    action, entropy = self.generate_action(obs, key=key)
-    q = frozen(critic).value(obs, action.reshape(action.shape[0], -1))
-    bonus = (jax.lax.stop_gradient(alpha) * entropy).sum(axis=-1, keepdims=True)
-    return {"actor": -(q + bonus).mean()}
+    return entropy_regularized_loss(self, obs, critic, alpha, key=key)
 
-  
+
 @register_policy
 class SAC(MaxEntRLPolicy):
   """Binds StochasticActor into the shared max-entropy actor-critic template --

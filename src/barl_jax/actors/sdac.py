@@ -23,7 +23,7 @@ class DDPMActorConfig(ActorOptimConfig):
   latent_dim: int = 128
   layers: int = 3
   mlp: NetworkConfig = field(default_factory=lambda: SimbaConfig())
-  
+
   time: TimeEmbeddingConfig = field(default_factory=lambda: FourierTimeConfig(
     time_dim=64, num_freqs=32, hidden=64, concat_input=False, learn_freqs=True))
   num_steps: int = 20
@@ -63,7 +63,7 @@ class DDPMActor(ActorOptim, Actor):
     if problems:
       raise ValueError(f"{type(self).__name__}: " + "; ".join(problems))
     self.field = TimeConditionedField(
-      self.obs_dim, self.plan_dim, latent_dim=config.latent_dim, layers=config.layers,
+      self.obs_dim, self.action_dim, latent_dim=config.latent_dim, layers=config.layers,
       time=config.time, mlp=config.mlp, rngs=rngs)
     self.t_grid = Buffer(jnp.linspace(config.t_min, config.t_max, config.num_steps + 1, dtype=jnp.float32))
 
@@ -104,13 +104,13 @@ class DDPMActor(ActorOptim, Actor):
   def generate_action(self, obs, *, critic=None, key=None):
     key = self.next_key(key)
     key, prior_key = jax.random.split(key)
-    x = jax.random.normal(prior_key, (obs.shape[0], self.plan_dim), jnp.float32)
+    x = jax.random.normal(prior_key, (obs.shape[0], self.action_dim), jnp.float32)
     x = reverse_chain(lambda x, n, k: self.reverse_step(obs, x, n, k), x, self.config.num_steps, key)
-    return self.to_plan(jnp.clip(x, -1.0, 1.0)), None
+    return jnp.clip(x, -1.0, 1.0), None
 
   # ---- reverse-sampling score matching ---------------------------------------
   def loss(self, obs, critic, alpha, *, key=None, action=None):
-    
+
     keys = jax.random.split(self.next_key(key), 5)
     if action is None:
       action = jax.lax.stop_gradient(self.generate_action(obs, key=keys[4])[0])
@@ -123,7 +123,7 @@ class DDPMActor(ActorOptim, Actor):
 
     # x0 = (x_t - sigma eps) / alpha lies in [-1, 1] iff eps lies in [lo, hi].
     lo, hi = (x_t - alpha_t) / sigma_t, (x_t + alpha_t) / sigma_t
-    eps = jax.random.truncated_normal(keys[2], lo, hi, (K, B, self.plan_dim))
+    eps = jax.random.truncated_normal(keys[2], lo, hi, (K, B, self.action_dim))
     # truncated_normal returns NaN when [lo, hi] is far in a tail.
     eps = jnp.where(jnp.isnan(eps), jnp.clip(jax.random.normal(keys[3], eps.shape), lo, hi), eps)
     candidates = self.x0_from_eps(x_t[None], eps, t)

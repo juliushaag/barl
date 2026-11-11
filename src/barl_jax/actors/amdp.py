@@ -35,7 +35,7 @@ class ScoreContinuousActorConfig(ActorOptimConfig):
   out_clip: float = 10000.0
   q_score_max_norm: float = 5.0
   q_score_max_percentile: float = 95.0
-  batch_rep: int = 3
+  batch_rep: int = 1
 
   def problems(self):
     problems = super().problems()
@@ -76,7 +76,7 @@ class ScoreContinuousActor(ActorOptim, Actor):
     latent_dim, layers = config.latent_dim, config.layers
 
     self.field = TimeConditionedField(
-      self.obs_dim, self.plan_dim, latent_dim=latent_dim, layers=layers,
+      self.obs_dim, self.action_dim, latent_dim=latent_dim, layers=layers,
       time=config.time, mlp=config.mlp, rngs=rngs)
 
     self.field.zero_init_head()   # u ~ 0 at the beginning
@@ -119,14 +119,14 @@ class ScoreContinuousActor(ActorOptim, Actor):
     return self._terminal_var
 
   def squash_correction(self, X):
-    return self.chunk_sum(self.squash.log_abs_det_jacobian(X))
+    return self.squash.log_abs_det_jacobian(X).sum(axis=-1)
 
   def derived(self) -> dict:
     return self.squash.derived()
 
   def prior_surprisal(self, X):
     const = 0.5 * self.action_dim * math.log(2 * math.pi * self._terminal_var)
-    return const + 0.5 * self.chunk_sum(X ** 2) / self._terminal_var
+    return const + 0.5 * (X ** 2).sum(axis=-1) / self._terminal_var
 
   def control(self, obs, x, tau):
     u = self.field(obs, x, self.scaled_time(tau))
@@ -145,8 +145,7 @@ class ScoreContinuousActor(ActorOptim, Actor):
     v = self.step_var[...][i]
     sqrt_v = jnp.sqrt(v)
     eps = jax.random.normal(key, u_tilde.shape, u_tilde.dtype)
-    log_w = (-0.5 * v * self.chunk_sum(u_tilde ** 2)
-             - sqrt_v * self.chunk_sum(eps * u_tilde))
+    log_w = -0.5 * v * (u_tilde ** 2).sum(axis=-1) - sqrt_v * (eps * u_tilde).sum(axis=-1)
     return X + v * u_tilde + sqrt_v * eps, log_w
 
   def generate_action(self, obs, *, critic: Critic = None, squash=True, key=None):
@@ -155,10 +154,10 @@ class ScoreContinuousActor(ActorOptim, Actor):
     B = obs.shape[0]
     key = self.next_key(key)
 
-    X = jnp.zeros((B, self.plan_dim), jnp.float32)
+    X = jnp.zeros((B, self.action_dim), jnp.float32)
     X, log_w = controlled_sde(lambda x, i, k: self.euler_step(obs, x, i, k),
                               X, self.config.max_steps, key,
-                              aux=jnp.zeros((B, self.chunk_size), jnp.float32))
+                              aux=jnp.zeros((B,), jnp.float32))
 
     log_w = log_w + self.prior_surprisal(X)
 
@@ -166,7 +165,7 @@ class ScoreContinuousActor(ActorOptim, Actor):
       log_w = log_w + self.squash_correction(X)
       X = self.squash(X)
 
-    return X.reshape(B, self.chunk_size, self.action_dim), log_w
+    return X, log_w
 
   def loss(self, obs, critic: Critic, alpha, *, key=None):
     """Adjoint matching (Adjoint Matching, arXiv:2409.08861, Sec. 5.2)"""
@@ -177,7 +176,7 @@ class ScoreContinuousActor(ActorOptim, Actor):
 
 
     X, _ = self.generate_action(obs, key=rollout_key, squash=False)
-    X = jax.lax.stop_gradient(X).reshape(X.shape[0], -1)
+    X = jax.lax.stop_gradient(X)
 
     def q_values(critic, x):
       return critic.value(obs, self.squash(x)).sum()
@@ -201,7 +200,7 @@ class ScoreContinuousActor(ActorOptim, Actor):
     sigma_tau = self.sigma_fn(tau)
 
     u      = sigma_tau * u_tilde
-    target = jax.lax.stop_gradient(sigma_tau * (score / self.chunk_broadcast(alpha)))
+    target = jax.lax.stop_gradient(sigma_tau * (score / alpha))
     loss   = (0.5 * ((u - target) ** 2).sum(axis=-1) / sigma_tau.squeeze(-1)).mean()
 
     self.metrics.scalar("score_loss", loss)

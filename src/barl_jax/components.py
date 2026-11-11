@@ -66,6 +66,14 @@ def frozen(module):
   return view
 
 
+def entropy_regularized_loss(actor, obs, critic, alpha, *, key=None) -> dict:
+  """The max-entropy actor objective, `-(Q(s, a) + alpha * H).mean()` at a
+  reparameterized sample: `alpha` and the critic are held fixed."""
+  action, entropy = actor.generate_action(obs, key=key)
+  q = frozen(critic).value(obs, action)
+  return {"actor": -(q + jax.lax.stop_gradient(alpha) * entropy).mean()}
+
+
 class _Static:
   __slots__ = ("value",)
 
@@ -95,7 +103,7 @@ class Component:
 
   Takes the run's `EnvStats` and its typed config as the first two positional
   arguments and keeps only what every component wants from the former
-  (`obs_dim`, `action_dim`, and the chunk plan's `chunk_size`/`plan_dim`).
+  (`obs_dim` and `action_dim`).
 
   The whole config is kept as `self.config` -- read `self.config.foo` from any
   method rather than copying fields onto flat attributes. It sits behind
@@ -124,11 +132,6 @@ class Component:
     env_stats = env_stats if env_stats is not None else EnvStats()
     self.obs_dim    = env_stats.get("obs_dim")
     self.action_dim = env_stats.get("act_dim")
-    # The plan width the actor emits / the critic prices: chunk_size primitives
-    # flattened. Single actions at chunk_size 1, so every existing shape is the
-    # flat special case and no call site reshapes.
-    self.chunk_size = int(env_stats.get("chunk_size") or 1)
-    self.plan_dim   = self.chunk_size * (self.action_dim or 0)
     # Both are overwritten by build_component with the real slot; the defaults
     # only keep a component constructed outside a Policy usable.
     self.slot       = type(self).__name__.lower()
@@ -148,26 +151,6 @@ class Component:
     holding no state -- the logged key comes from where this component sits in
     the module tree, so it never names itself."""
     return Recorder(self)
-
-  def to_plan(self, flat):
-    """A flat `(B, plan_dim)` array as `(B, chunk_size, action_dim)`."""
-    return flat.reshape(flat.shape[0], self.chunk_size, self.action_dim)
-
-  def chunk_sum(self, x):
-    """An elementwise per-dimension quantity at plan resolution, `(..., plan_dim)`,
-    reduced within each chunk position's `action_dim` block: `(..., plan_dim) ->
-    (..., chunk_size)`. At chunk_size 1 this is the old full-plan `.sum(axis=-1)`
-    unchanged -- a per-chunk-position alpha and a single whole-plan alpha are the
-    same code path, just multiplied against a differently-shaped alpha."""
-    return x.reshape(*x.shape[:-1], self.chunk_size, self.action_dim).sum(axis=-1)
-
-  def chunk_broadcast(self, alpha):
-    """A per-chunk-position alpha, shape `()` or `(chunk_size,)`, widened to
-    `(plan_dim,)` by repeating each position's value across its `action_dim`
-    block -- the inverse reshape of `chunk_sum`, for a term that lives at plan
-    resolution (AMDP's score divisor) rather than being summed down to it."""
-    alpha = jnp.asarray(alpha)
-    return alpha if alpha.ndim == 0 else jnp.repeat(alpha, self.action_dim)
 
   @classmethod
   def config_problems(cls, config) -> list[str]:
@@ -215,11 +198,8 @@ class ActionSampler(Component, nnx.Module, ABC):
   @abstractmethod
   def generate_action(self, obs, *, critic: "Critic" = None, key=None) -> tuple:
     """(action, entropy): a canonical [-1, 1] action, one row per obs row, and
-    the differential entropy of whatever distribution produced it, decomposed
-    per chunk position -- shaped `(B, chunk_size)`. A caller wanting one
-    number sums the chunk axis itself (`target_entropy_bonus` and the actor losses do exactly that, weighted
-    by whatever shape `alpha` is). A sampler without an entropy estimate
-    returns None for entropy."""
+    the differential entropy of whatever distribution produced it, shaped `(B,)`.
+    A sampler without an entropy estimate returns None for entropy."""
 
   def sample(self, obs, *, critic: "Critic" = None, key=None):
     """The played action alone -- the default just discards the entropy

@@ -6,11 +6,8 @@ from flax import nnx
 
 from barl_jax.components import Actor, Critic, frozen
 from barl_jax.config.schemas import ComponentsConfig, ModelConfig, register_model
-from barl_jax.critics.base import TargetConfig
 from barl_jax.critics.categorical import C51CriticConfig
-from barl_jax.critics.direct import EnsembleCriticConfig
 from barl_jax.networks.base import NetworkConfig
-from barl_jax.networks.mlp import MLPConfig
 from barl_jax.networks.simba import SimbaConfig
 from barl_jax.optimization import ActorOptim, ActorOptimConfig
 from barl_jax.policies.rl import PolicyConfig, RLPolicy
@@ -41,7 +38,7 @@ class DeterministicActor(ActorOptim, Actor):
 
   def __init__(self, env_stats, config: DeterministicActorConfig, *, rngs: nnx.Rngs, **kwargs):
     super().__init__(env_stats, config, rngs=rngs, **kwargs)
-    self.net = config.mlp.build(self.obs_dim, self.plan_dim, config.latent_dim, config.layers,
+    self.net = config.mlp.build(self.obs_dim, self.action_dim, config.latent_dim, config.layers,
                                 rngs=rngs)
 
   def mean(self, s):
@@ -52,7 +49,7 @@ class DeterministicActor(ActorOptim, Actor):
     noise = std * jax.random.normal(self.next_key(key), mean.shape, mean.dtype)
     if clip is not None:
       noise = jnp.clip(noise, -clip, clip)
-    return self.to_plan(jnp.clip(mean + noise, -1.0, 1.0))
+    return jnp.clip(mean + noise, -1.0, 1.0)
 
   def generate_action(self, s, *, critic: Critic = None, key=None):
     return self.noisy(s, key, self.config.target_noise, self.config.target_noise_clip), None

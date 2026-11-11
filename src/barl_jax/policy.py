@@ -10,7 +10,6 @@ import numpy as np
 from flax import nnx
 
 import barl_jax.executors as executors
-from barl_jax.action_chunking import normalize_action_chunk
 from barl_jax.components import (
   TRAINABLE,
   Buffer,
@@ -132,9 +131,7 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
     # Gradient steps taken, for algorithms whose update cadence is `step % k`.
     self.train_steps = Buffer(jnp.zeros((), jnp.int32))
 
-    self._env_stats = _Static(stats.derive(
-      chunk_size=self.chunk_size,
-      chunked_act_dim=self.chunk_size * self.action_dim))
+    self._env_stats = _Static(stats)
 
   @property
   def env_stats(self) -> EnvStats:
@@ -161,10 +158,6 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
   @property
   def params(self):
     return self.config.params
-
-  @property
-  def chunk_size(self) -> int:
-    return self.params.chunk_size
 
   @property
   def normalize_obs(self) -> bool:
@@ -199,7 +192,7 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
     """Constructs a named slot (actor/critic/squash/...) from its typed config,
     gated to `gate_cls`: the resolved class must be `gate_cls` or a subclass.
     `env_stats` overrides the run's own for a slot another component wraps and
-    feeds a transformed input -- pass an `EnvStats.derive()` of the run's.
+    feeds a transformed input -- pass a modified copy of the run's.
 
     `explicit_kwargs` are for values computed at run time that never live in
     config (an entropy dual's `target`)."""
@@ -290,10 +283,6 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
       return obs
     return (obs - self.obs_mean[...]) / jnp.maximum(self.obs_std[...], 1e-6)
 
-  @property
-  def discount(self):
-    return 1.0
-
   # Action scaling
 
   # Every continuous actor trains against a canonical per-dimension [-1, 1]
@@ -317,10 +306,6 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
     if self.action_discrete:
       return None, None
     return np.asarray(self.act_scale[...]), np.asarray(self.act_bias[...])
-
-  def action_chunk(self, action):
-    """Canonical runtime action shape, always `(batch, chunk_size, act_dim)`."""
-    return normalize_action_chunk(action, chunk_size=self.chunk_size, act_dim=self.action_dim, xp=jnp)
 
   # Misc
 
@@ -381,8 +366,8 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
   #: traced.
   supports_bon = False
 
-  def score(self, observation, action_chunk):
-    """`(observation, action_chunk) -> score`, one scalar per batch row,
+  def score(self, observation, action):
+    """`(observation, action) -> score`, one scalar per batch row,
     pinned to this policy's *current* weights (same lifecycle as
     `inference_fn`). Only meaningful when `supports_bon` is True."""
     raise NotImplementedError(f"{type(self).__name__} does not support Best-of-N scoring")
@@ -414,7 +399,6 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
 
   @abstractmethod
   def inference_step(self, observation, step_info: Optional[dict] = None, key=None) -> tuple:
-    """Returns `(action_chunk, extras)` where `action_chunk` always has shape
-    `(batch, chunk_size, act_dim)` and `extras` is a dict of named arrays to
-    log/persist alongside the currently active chunk."""
+    """Returns `(action, extras)` where `action` has shape `(batch, act_dim)` and
+    `extras` is a dict of named arrays to log/persist alongside it."""
     ...

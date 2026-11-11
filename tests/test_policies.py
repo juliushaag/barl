@@ -83,10 +83,10 @@ def test_actor_loss_gradient_does_not_reach_the_critic(name):
 
 
 @pytest.mark.parametrize("name", MODELS)
-def test_inference_returns_a_singleton_chunk_by_default(name):
+def test_inference_returns_one_action_per_row(name):
   policy = make(name)
   act, _ = policy.inference_fn()(jnp.zeros((BATCH, OBS_DIM), jnp.float32), jax.random.PRNGKey(0))
-  assert act.shape == (BATCH, 1, ACT_DIM)
+  assert act.shape == (BATCH, ACT_DIM)
 
 
 @pytest.mark.parametrize("name", MODELS)
@@ -98,33 +98,6 @@ def test_optimizer_labels_cover_every_trainable_leaf(name):
     for p in path:
       owner = owner[p]
     assert owner is not None, f"{'.'.join(map(str, path))} has no optimizer label"
-
-
-@pytest.mark.parametrize("name", MAXENT_MODELS)
-@pytest.mark.parametrize("chunk_size", [1, 4])
-def test_per_action_alpha_gives_one_alpha_per_chunk_position(name, chunk_size):
-  """`alpha_granularity: per_action` trains one Lagrange multiplier per chunk
-  position instead of one for the whole plan. Every MaxEnt actor's entropy is
-  already decomposed at that resolution (`Component.chunk_sum`), so this has
-  to hold for every one of them, at chunk_size 1 (where it must degenerate to
-  the same shape `per_chunk` uses) and above."""
-  run = RunConfig.from_dict({
-    "model": name, "env": "HalfCheetah",
-    "model_overrides": {"params": {"alpha_granularity": "per_action", "chunk_size": chunk_size}},
-  })
-  policy = Policy.make(name, FakeEnv(), run.model_config, env_stats=make_env_stats(), seed=0)
-  assert policy.chunk_size == chunk_size
-  assert policy.alpha().shape == (chunk_size,)
-
-  optimizer = nnx.Optimizer(policy, policy.build_optimizer(lr_schedule=None), wrt=TRAINABLE)
-  graphdef, state = nnx.split((policy, optimizer))
-
-  data = {**batch(), "act": jnp.clip(jax.random.normal(jax.random.PRNGKey(2), (BATCH, chunk_size * ACT_DIM)), -1, 1),
-          "horizon": jnp.full((BATCH,), chunk_size, jnp.int32)}
-  for _ in range(4):
-    state, losses, _, _ = train_step(graphdef, state, data, ())
-    assert set(losses) == set(policy.create_optimizer())
-    assert all(np.isfinite(np.asarray(v)) for v in losses.values())
 
 
 # One captured snapshot per model, from the current (pre-refactor) code. A

@@ -17,7 +17,7 @@ from barl_jax.config.schemas import (
   component_to_dict,
   model_schema,
 )
-from barl_jax.config.serialization import construct, is_instance, merge, type_name
+from barl_jax.config.serialization import construct, drop_unknown, is_instance, merge, type_name
 from barl_jax.executors import DirectExecutorConfig, ExecutorConfig
 from barl_jax.registration import available_executors, get_component, get_executor
 
@@ -72,7 +72,7 @@ class RunConfig:
     return cls(model=model, env=env, model_config=model_schema(model)())
 
   @classmethod
-  def from_dict(cls, mapping: Mapping[str, Any]) -> "RunConfig":
+  def from_dict(cls, mapping: Mapping[str, Any], *, strict: bool = True) -> "RunConfig":
     if not isinstance(mapping, Mapping):
       raise TypeError(f"run config must be a mapping, got {type(mapping).__name__}")
     if "runs" in mapping or "defaults" in mapping:
@@ -85,23 +85,21 @@ class RunConfig:
         raise TypeError("model and env selectors must be strings")
 
     names = {f.name for f in fields(cls)} - {"model_config"}
-    unknown = sorted(set(mapping) - names - {"model_overrides"})
-    if unknown:
-      raise KeyError(f"run config: unknown keys {unknown}; available keys: "
-                     f"{sorted(names - set(_NESTED) | {'model_overrides'})}")
+    mapping = drop_unknown(mapping, names | {"model_overrides"}, path="run config", strict=strict,
+                           available=names - set(_NESTED) | {"model_overrides"})
 
     result = cls.defaults(mapping["model"], mapping["env"])
     plain = {k: v for k, v in mapping.items()
              if k in names and k not in ("model", "env", *_NESTED)}
-    result = merge(result, plain)
+    result = merge(result, plain, strict=strict)
     for key in ("collection_executor", "eval_executor"):
       if key in mapping:
-        result = replace(result, **{key: _executor_config(mapping[key], path=key)})
+        result = replace(result, **{key: _executor_config(mapping[key], path=key, strict=strict)})
     overrides = mapping.get("model_overrides")
     if overrides is not None:
       if not isinstance(overrides, Mapping):
         raise TypeError("model_overrides must be a mapping")
-      result = replace(result, model_config=result.model_config.overridden(overrides))
+      result = replace(result, model_config=result.model_config.overridden(overrides, strict=strict))
     result.check()
     return result
 
@@ -163,7 +161,7 @@ def validate_run(cfg: RunConfig | Mapping[str, Any], *, num_seeds: int | None = 
   return problems
 
 
-def _executor_config(raw: Mapping[str, Any], *, path: str) -> ExecutorConfig:
+def _executor_config(raw: Mapping[str, Any], *, path: str, strict: bool = True) -> ExecutorConfig:
   """A `class`-tagged mapping -> a fresh, typed executor config. There is no
   prior instance to merge onto, so the mapping must name its class."""
   if not isinstance(raw, Mapping):
@@ -172,7 +170,7 @@ def _executor_config(raw: Mapping[str, Any], *, path: str) -> ExecutorConfig:
   name = value.pop("class", value.pop("class_name", None))
   if name is None:
     raise KeyError(f"{path}: must name a 'class' (available executors: {available_executors()})")
-  return construct(get_executor(name).config_type, value, path=path)
+  return construct(get_executor(name).config_type, value, path=path, strict=strict)
 
 
 def _is_int(value, minimum: int) -> bool:

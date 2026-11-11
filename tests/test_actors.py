@@ -1,8 +1,7 @@
 """The `Actor` contract, plus the algebraic identities the diffusion actors'
 callers depend on.
 
-Actors emit action plans `(B, chunk, dim)`, scored flat; the owning Policy
-squashes nothing further. `sample` returns the plan, not a primitive.
+Actors emit actions `(B, dim)`; the owning Policy squashes nothing further.
 """
 
 import jax
@@ -26,12 +25,12 @@ SAMPLERS = [n for n in ACTORS if hasattr(get_component(n), "sample")]
 
 @pytest.mark.parametrize("name", SAMPLERS)
 def test_sample_contract(name, obs, key):
-    """One plan per row, finite, and a pure function of the key it was given --
+    """One action per row, finite, and a pure function of the key it was given --
     every draw takes an explicit key because there is no global RNG here."""
     a = built(name)
     action = a.sample(obs, key=key)
 
-    assert action.shape == (BATCH, a.chunk_size, ACT_DIM)
+    assert action.shape == (BATCH, ACT_DIM)
     assert finite(action)
     assert jnp.array_equal(action, a.sample(obs, key=key))
     assert not jnp.array_equal(action, a.sample(obs, key=jax.random.PRNGKey(7)))
@@ -51,8 +50,8 @@ def test_sample_is_differentiable_wrt_params(name, obs, key):
 def test_x0_from_eps_inverts_the_marginal(name):
     """SDAC's candidates are `x0_from_eps` of the forward marginal at a known eps."""
     a = built(name)
-    x0 = jax.random.normal(jax.random.PRNGKey(3), (BATCH, a.plan_dim))
-    eps = jax.random.normal(jax.random.PRNGKey(4), (BATCH, a.plan_dim))
+    x0 = jax.random.normal(jax.random.PRNGKey(3), (BATCH, a.action_dim))
+    eps = jax.random.normal(jax.random.PRNGKey(4), (BATCH, a.action_dim))
     t = jnp.full((BATCH, 1), 0.3)
 
     alpha, sigma = a.alpha_sigma(t)
@@ -74,7 +73,7 @@ def test_stochastic_actor_rsample(obs, key):
     a = built("StochasticActor")
     action, x, _ = a.rsample(obs, key)
 
-    assert x.shape == (BATCH, a.plan_dim)
+    assert x.shape == (BATCH, a.action_dim)
     assert jnp.all(jnp.abs(action) <= 1.0)
 
 
@@ -82,7 +81,7 @@ def test_deterministic_actor_noise_roles(obs, key):
     """Exploration and target smoothing are noise around one mean; the actor
     loss sees neither."""
     a = built("DeterministicActor")
-    mean = a.to_plan(a.mean(obs))
+    mean = a.mean(obs)
     cfg = a.config
 
     assert jnp.abs(a.sample(obs, key=key) - mean).max() > 0

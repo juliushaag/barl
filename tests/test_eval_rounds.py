@@ -34,7 +34,7 @@ def test_evaluation_reuses_seed_slots_and_groups_rounds(monkeypatch, tmp_path, n
 
   def actor_factory(graphdef, state, seeds, width, reference, **kwargs):
     assert (seeds, width) == (num_seeds, 1)
-    return SimpleNamespace(chunk_size=1, action_dim=1, num_seeds=num_seeds,
+    return SimpleNamespace(action_dim=1, num_seeds=num_seeds,
       inference_fn=lambda: lambda obs, key: (jnp.arange(num_seeds)[:, None] / num_seeds, {}))
 
   monkeypatch.setattr(trainer, 'StackedPolicy', actor_factory)
@@ -84,12 +84,12 @@ def test_want_video_renders_exactly_one_episode_and_rotates_seeds(monkeypatch, t
       return np.zeros((2, 2, 3), dtype=np.uint8)
 
   def actor_factory(graphdef, state, seeds, width, reference, **kwargs):
-    return SimpleNamespace(chunk_size=1, action_dim=1, num_seeds=num_seeds,
+    return SimpleNamespace(action_dim=1, num_seeds=num_seeds,
       inference_fn=lambda: lambda obs, key: (jnp.zeros((num_seeds, 1)), {}))
 
   # unstack(graphdef, state, index) -> (policy, optimizer); SeedActor only
-  # ever reads chunk_size/action_dim/inference_fn off the policy half.
-  seed_policy = SimpleNamespace(chunk_size=1, action_dim=1,
+  # ever reads action_dim/inference_fn off the policy half.
+  seed_policy = SimpleNamespace(action_dim=1,
     inference_fn=lambda executor=None: (lambda obs, key: (jnp.zeros((1, 1)), {})))
 
   monkeypatch.setattr(trainer, 'StackedPolicy', actor_factory)

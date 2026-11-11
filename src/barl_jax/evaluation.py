@@ -3,7 +3,7 @@ import gymnasium as gym
 import jax
 import numpy as np
 
-from barl_jax.action_chunking import ActionChunkExecutor, step_env
+from barl_jax.collection import act_on, step_env
 from barl_jax.components import action_bounds_numpy
 from barl_jax.seeding import derive_seed
 
@@ -62,7 +62,6 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
 
   act = actor.inference_fn()
   key = jax.random.PRNGKey(seed)
-  chunk_size = getattr(actor, "chunk_size", 1)
   action_space = env.single_action_space if is_vec else env.action_space
   act_scale_np, act_bias_np = action_bounds_numpy(action_space)
   act_dim = getattr(actor, "action_dim",
@@ -75,17 +74,20 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
     wave = min(n_envs, n - len(out))
     obs  = reset(wave_index)
     refill_index = 0
-    chunks = ActionChunkExecutor(act, chunk_size=chunk_size, act_dim=act_dim, n_envs=n_envs)
     data = [dict(frames=[], rewards=[], terminated=False, success=False,
-                 act_nonfinite=0, n_act=0, chunk_size=chunk_size,
-                 chunk_refills=0, chunk_waste_frac=0.0)
+                 act_nonfinite=0, n_act=0)
             for _ in range(n_envs)]
     live = np.zeros(n_envs, dtype=bool)
     live[:wave] = True
 
     while live.any():
       key, subkey = jax.random.split(key)
-      action_np, _ = chunks.current(obs, subkey, live=live, full_batch=hasattr(actor, "num_seeds"))
+      # Vmapped seed policies need every seed slot, even after some episodes
+      # finish; any other policy only acts for the slots still running.
+      rows = None if hasattr(actor, "num_seeds") else np.flatnonzero(live)
+      action_live, _ = act_on(act, obs, subkey, act_dim=act_dim, rows=rows)
+      action_np = np.zeros((n_envs, act_dim), np.float32)
+      action_np[live] = action_live if rows is not None else action_live[live]
       nonfinite = ~np.isfinite(action_np)
       obs, reward, term, trunc, info = step_env(env, action_np, act_scale_np, act_bias_np,
                                                 is_vec=is_vec)
@@ -93,9 +95,6 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
       frames = (env.call("render") if is_vec else [env.render()]) if render else None
 
       done = term | trunc
-      chunks.advance(done)
-      slot_refills = chunks.slot_refills()
-      slot_wasted = chunks.slot_wasted()
       for i in np.flatnonzero(live):
         data[i]["rewards"].append(reward[i])
         data[i]["act_nonfinite"] += int(nonfinite[i].sum())
@@ -105,9 +104,6 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
         if done[i]:
           data[i]["terminated"] = bool(term[i])
           data[i]["success"] = episode_success(info, i, is_vec, bool(term[i]))
-          data[i]["chunk_refills"] = int(slot_refills[i])
-          executed = max(1, data[i]["chunk_refills"] * chunk_size)
-          data[i]["chunk_waste_frac"] = float(slot_wasted[i]) / executed
           live[i] = False
 
       if live.any() and done.any():

@@ -73,7 +73,9 @@ def saved_model(path, name=None):
   model = dict(saved["model"])
   # Checkpoints from before `chunk_size` moved into the params carry it as a kwarg.
   model["params"] = {**model.get("params", {}), **(meta.get("kwargs") or {})}
-  return model_schema(meta["model"]).from_dict(model), meta
+  # Saved configs may name keys a later version removed (`chunk_size`,
+  # `alpha_granularity`): warn and drop them rather than refuse to load.
+  return model_schema(meta["model"]).from_dict(model, strict=False), meta
 
 
 def load_policy(path, env, env_stats=None, name=None, **kwargs):

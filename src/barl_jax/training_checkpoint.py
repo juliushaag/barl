@@ -26,8 +26,8 @@ from barl_jax.result import write_json_atomic
 # `restore_training` actually construct or restore learning state and import
 # orbax and multiseed.unstack locally, where that state is built.
 
-# v3: run config dropped `profile`, `chunk_size` (now `model.params.chunk_size`)
-# and `env_metadata`, so older saved configs no longer round-trip. v2 renamed the
+# v3: run config dropped `profile`, `chunk_size` and `env_metadata`, so older
+# saved configs no longer round-trip. v2 renamed the
 # replay field `rew` -> `chunk_return`; an older replay .npz would silently
 # restore as an empty buffer. Both are rejected rather than reinterpreted.
 VERSION = 3

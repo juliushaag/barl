@@ -89,7 +89,6 @@ def test_sac_and_amdp_accept_floq_critic_and_take_a_training_step(model):
   run = RunConfig.from_dict({
     "model": model, "env": "HalfCheetah",
     "model_overrides": {
-      "params": {"chunk_size": 2},
       "components": {
         "actor": {"latent_dim": 8},
         "critic": {"class": "FloqCritic", "latent_dim": 8,
@@ -107,8 +106,6 @@ def test_sac_and_amdp_accept_floq_critic_and_take_a_training_step(model):
   optimizer = nnx.Optimizer(policy, policy.build_optimizer(lr_schedule=None), wrt=TRAINABLE)
   graphdef, state = nnx.split((policy, optimizer))
   data = _batch()
-  data["act"] = jnp.tile(data["act"], (1, 2))
-  data["horizon"] = jnp.full_like(data["horizon"], 2)
   state, losses, _, _ = train_step(graphdef, state, data, (PRIMARY, DEBUG), jnp.asarray(0))
   assert losses and all(bool(jnp.all(jnp.isfinite(v))) for v in losses.values())
 

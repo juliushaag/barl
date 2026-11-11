@@ -160,7 +160,7 @@ def _resolve_config(run) -> dict | None:
       raise ValueError("checkpoint_mode: resume requires checkpoint")
     meta = read_training(cfg.checkpoint)
     validate_resume(cfg, run.num_seeds, meta)
-    run.cfg = RunConfig.from_dict(meta["config"]).replace(
+    run.cfg = RunConfig.from_dict(meta["config"], strict=False).replace(
       **{key: getattr(cfg, key) for key in MUTABLE_ON_RESUME})
     return meta
   if cfg.checkpoint:
@@ -443,8 +443,7 @@ def _train(run: Run):
     # Prefill steps count toward neither env_steps nor grad_steps; skipped on
     # resume, which already has a filled buffer.
     run.collector.random_fill(run.rollout_env, n_steps=cfg.params.random_steps // run.num_envs,
-                              seed=run.base_seed, chunk_size=run.reference.chunk_size,
-                              discount=run.reference.discount, sink=run.buffer)
+                              seed=run.base_seed, sink=run.buffer)
     log.message(f"Random-filled the buffer with {cfg.params.random_steps} env steps before training")
   if run.progress:
     log.advance({key: run.progress[key] for key in ("env_steps", "grad_steps")})
@@ -615,7 +614,7 @@ class _TrainLoop:
     first_seed = (run.base_seed + int(run.progress.get("env_steps", 0))
                   if run.collector.state is None else None)
     rollout_stats = run.collector.collect(actor, env=run.rollout_env, n_steps=self.steps_per_iter,
-                                          seed=first_seed, discount=actor.discount, sink=run.buffer)
+                                          seed=first_seed, sink=run.buffer)
     elapsed = time.perf_counter() - start
     log.advance({"env_steps": self.cfg.rollout_steps})
     log.log_per_seed([{f"rollout/{k}": v for k, v in seed.items()}
@@ -738,7 +737,7 @@ def _validate(run: Run):
   actor = StackedPolicy(run.graphdef, run.state, run.num_seeds, run.num_envs, run.reference,
                         executor=run.collection_executor)
   run.collector.collect(actor, env=run.rollout_env, n_steps=cfg.params.batch_size,
-                     seed=run.base_seed, discount=actor.discount, sink=run.buffer)
+                     seed=run.base_seed, sink=run.buffer)
 
   batch = run.buffer.sample(cfg.params.batch_size)
   run.state, losses, primary, debug = seeded_step(run.graphdef, run.state, batch,

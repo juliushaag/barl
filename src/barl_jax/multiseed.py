@@ -41,7 +41,7 @@ class SeedActor:
 
   def __init__(self, policy, executor: "executors.ActionExecutor" = None):
     self.policy, self.executor = policy, executor
-    self.chunk_size, self.action_dim = policy.chunk_size, policy.action_dim
+    self.action_dim = policy.action_dim
 
   def inference_fn(self):
     return self.policy.inference_fn(executor=self.executor)
@@ -56,8 +56,6 @@ class StackedPolicy:
     self._state    = state
     self.num_seeds = num_seeds
     self.num_envs  = num_envs
-    self.discount = reference.discount
-    self.chunk_size = reference.chunk_size
     self.action_dim = reference.action_dim
     self.action_discrete = reference.action_discrete
     self._bounds = reference.action_bounds_numpy()

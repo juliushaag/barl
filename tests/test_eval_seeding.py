@@ -56,11 +56,10 @@ class SpyVectorEnv(gym.vector.VectorEnv):
 
 class Actor:
   action_dim = ACT_DIM
-  chunk_size = 1
 
   def inference_fn(self):
     def infer(obs, key):
-      return jnp.zeros((obs.shape[0], 1, ACT_DIM)), {}
+      return jnp.zeros((obs.shape[0], ACT_DIM)), {}
     return infer
 
 
@@ -111,7 +110,7 @@ def test_policy_action_key_is_derived_from_seed_not_hardcoded():
     def inference_fn(self):
       def infer(obs, key):
         seen_keys.append(np.asarray(key))
-        return jnp.zeros((obs.shape[0], 1, ACT_DIM)), {}
+        return jnp.zeros((obs.shape[0], ACT_DIM)), {}
       return infer
 
   run_episodes(KeySpyActor(), SpyVectorEnv(2), n=1, render=False, seed=999)

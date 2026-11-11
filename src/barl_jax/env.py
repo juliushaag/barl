@@ -31,10 +31,6 @@ class EnvStats(dict):
     stats.update(declared)
     return stats
 
-  def derive(self, **overrides) -> "EnvStats":
-    """Shallow copy with some keys replaced, for a component that feeds its
-    inner network something other than the raw env dims."""
-    return EnvStats({**self, **overrides})
 
 
 class Environment(ABC):

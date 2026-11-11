@@ -74,7 +74,7 @@ class LangevinActor(ActionSampler):
     num_levels = int(sigmas.size)
     key, init_key = jax.random.split(key)
     a = self.config.init_scale * (2.0 * jax.random.uniform(
-      init_key, (obs.shape[0], self.chunk_size * self.action_dim), jnp.float32) - 1.0)
+      init_key, (obs.shape[0], self.action_dim), jnp.float32) - 1.0)
 
     score_norm = jnp.zeros(())
     keys = jax.random.split(key, num_levels * self.config.steps_per_level)
@@ -109,7 +109,7 @@ class LangevinActor(ActionSampler):
           a = jnp.clip(a, -self.config.action_limit, self.config.action_limit)
 
     self.metrics.scalar("score_norm", score_norm)
-    return a.reshape(a.shape[0], self.chunk_size, self.action_dim), None
+    return a, None
 
 
 @dataclass(frozen=True)

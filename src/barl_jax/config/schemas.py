@@ -17,7 +17,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, fields, replace
 from typing import TYPE_CHECKING, Any, Mapping
 
-from barl_jax.config.serialization import construct
+from barl_jax.config.serialization import construct, drop_unknown
 from barl_jax.config.serialization import merge as merge_dataclass
 
 if TYPE_CHECKING:
@@ -30,6 +30,20 @@ CHECKPOINT_MODES = ("weights", "resume")
 LR_DECAYS = ("sine", "linear", "cosine", "constant")
 
 
+def check_legacy_params(params: Mapping[str, Any], *, path: str) -> None:
+  """Saved params from before action chunking was removed. A `chunk_size` of 1
+  is the same model (the key itself is then dropped with the other unknown
+  keys); a longer chunk has differently-shaped weights and cannot be loaded."""
+  if params.get("chunk_size", 1) != 1:
+    raise ValueError(
+      f"{path}.chunk_size={params['chunk_size']!r}: action chunking has been removed, so "
+      f"only chunk_size=1 models can be loaded")
+  if params.get("alpha_granularity", "per_chunk") != "per_chunk":
+    raise ValueError(
+      f"{path}.alpha_granularity={params['alpha_granularity']!r}: per-chunk-position entropy "
+      f"temperatures have been removed, so only models trained with 'per_chunk' can be loaded")
+
+
 def component_to_dict(component: Any) -> dict[str, Any]:
   """Canonical nested form, with ``class`` as the public selector key."""
   out = asdict(component)
@@ -38,13 +52,14 @@ def component_to_dict(component: Any) -> dict[str, Any]:
   return deepcopy(out)
 
 
-def component_from_dict(values: Mapping[str, Any], *, path: str = "component"):
-  """Inverse of `component_to_dict`, built strictly from `values` alone."""
+def component_from_dict(values: Mapping[str, Any], *, path: str = "component", strict: bool = True):
+  """Inverse of `component_to_dict`, built from `values` alone."""
   from barl_jax.registration import get_component
   values = _selector_to_class_name(values)
   if "class_name" not in values:
     raise KeyError(f"{path}: names no 'class'")
-  return construct(get_component(values["class_name"]).config_type, values, path=path)
+  return construct(get_component(values["class_name"]).config_type, values, path=path,
+                   strict=strict)
 
 
 def _selector_to_class_name(values: Mapping[str, Any]) -> dict[str, Any]:
@@ -94,59 +109,58 @@ class ModelConfig:
     }
 
   @classmethod
-  def from_dict(cls, values: Mapping[str, Any]) -> "ModelConfig":
+  def from_dict(cls, values: Mapping[str, Any], *, strict: bool = True) -> "ModelConfig":
     """Rebuild a model from a complete `to_dict()` mapping, without consulting
-    current defaults -- a saved model is authoritative."""
-    unknown = sorted(set(values) - {"policy", "params", "components"})
-    if unknown:
-      raise KeyError(f"model: unknown keys {unknown}; available keys: "
-                     "['policy', 'params', 'components']")
+    current defaults -- a saved model is authoritative. `strict=False` (saved
+    checkpoints) warns about and drops keys this version no longer has."""
+    values = drop_unknown(values, ("policy", "params", "components"), path="model", strict=strict)
+    if not strict:
+      check_legacy_params(values.get("params", {}), path="params")
     default = cls()
     if values.get("policy", default.policy_class) != default.policy_class:
       raise ValueError(f"model policy {values['policy']!r} does not match {default.policy_class!r}")
     params = construct(cls.__dataclass_fields__["params"].type, values.get("params", {}),
-                       path="params")
+                       path="params", strict=strict)
     slots = values.get("components", {})
     known = {f.name for f in fields(ComponentsConfig)}
-    if set(slots) - known:
-      raise KeyError(f"model.components: unknown slots {sorted(set(slots) - known)}; "
-                     f"available slots: {sorted(known)}")
-    components = ComponentsConfig(**{slot: component_from_dict(value, path=f"components.{slot}")
+    slots = drop_unknown(slots, known, path="model.components", strict=strict)
+    components = ComponentsConfig(**{slot: component_from_dict(value, path=f"components.{slot}",
+                                                               strict=strict)
                                      for slot, value in slots.items()})
     return cls(policy_class=default.policy_class, params=params, components=components)
 
-  def overridden(self, overrides: Mapping[str, Any]) -> "ModelConfig":
+  def overridden(self, overrides: Mapping[str, Any], *, strict: bool = True) -> "ModelConfig":
     """Apply a partial `model_overrides` mapping on top of this model."""
-    unknown = sorted(set(overrides) - {"policy", "params", "components"})
-    if unknown:
-      raise KeyError(f"model_overrides: unknown keys {unknown}; available keys: "
-                     "['policy', 'params', 'components']")
+    overrides = drop_unknown(overrides, ("policy", "params", "components"),
+                             path="model_overrides", strict=strict)
+    if not strict:
+      check_legacy_params(overrides.get("params", {}), path="model_overrides.params")
     if "policy" in overrides and overrides["policy"] != self.policy_class:
       raise ValueError(f"model_overrides.policy={overrides['policy']!r} does not match "
                        f"selected policy {self.policy_class!r}")
     result = self
     if "params" in overrides:
       result = replace(result, params=merge_dataclass(
-        result.params, overrides["params"], path="model_overrides.params"))
+        result.params, overrides["params"], path="model_overrides.params", strict=strict))
     if "components" in overrides:
       entries = overrides["components"]
       if not isinstance(entries, Mapping):
         raise TypeError("model_overrides.components must be a mapping")
       slots = {f.name for f in fields(result.components)}
-      if set(entries) - slots:
-        raise KeyError(f"model_overrides.components: unknown slots {sorted(set(entries) - slots)}; "
-                       f"available slots: {sorted(slots)}")
+      entries = drop_unknown(entries, slots, path="model_overrides.components", strict=strict)
       values = {}
       for slot, override in entries.items():
         current = getattr(result.components, slot)
         if current is None:
           raise KeyError(f"model_overrides.components.{slot}: slot is not present in {self.policy_class}")
-        values[slot] = _override_component(current, override, path=f"model_overrides.components.{slot}")
+        values[slot] = _override_component(current, override, path=f"model_overrides.components.{slot}",
+                                         strict=strict)
       result = replace(result, components=replace(result.components, **values))
     return result
 
 
-def _override_component(base: Any, override: Mapping[str, Any], *, path: str) -> Any:
+def _override_component(base: Any, override: Mapping[str, Any], *, path: str,
+                        strict: bool = True) -> Any:
   if not isinstance(override, Mapping):
     raise TypeError(f"{path} must be a mapping")
   from barl_jax.registration import get_component
@@ -154,7 +168,7 @@ def _override_component(base: Any, override: Mapping[str, Any], *, path: str) ->
   selected = raw.pop("class_name", base.class_name)
   if selected != base.class_name:
     base = get_component(selected).config_type()
-  return merge_dataclass(base, raw, path=path)
+  return merge_dataclass(base, raw, path=path, strict=strict)
 
 
 # Populated by `register_model()` as a side effect of importing each algorithm's

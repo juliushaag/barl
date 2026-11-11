@@ -1,6 +1,7 @@
 """Small dataclass construction and serialization primitives for config classes."""
 from __future__ import annotations
 
+import warnings
 from copy import deepcopy
 from dataclasses import fields, is_dataclass, replace
 from types import UnionType
@@ -78,18 +79,32 @@ def _variant(cls: type, name: str, path: str) -> type:
                    f"available: {sorted(cls.variants)}") from None
 
 
-def construct(cls: type, values: Mapping[str, Any], *, path: str = ""):
-  """Construct ``cls`` recursively, rejecting unknown keys and bad types. A config
-  with a `variants` registry is built as the variant its `class_name` names."""
+def drop_unknown(values: Mapping[str, Any], declared, *, path: str, strict: bool,
+                 available=None) -> Mapping[str, Any]:
+  """`values` minus keys outside `declared`. Strict raises on them; lenient (saved
+  checkpoints, whose configs may name keys a later version removed) warns and
+  drops, so an old checkpoint still loads."""
+  unknown = sorted(set(values) - set(declared))
+  if not unknown:
+    return values
+  available = sorted(declared if available is None else available)
+  if strict:
+    raise KeyError(f"{path}: unknown keys {unknown}; available keys: {available}")
+  warnings.warn(f"{path}: ignoring unknown keys {unknown} (not supported by this version; "
+                f"available keys: {available})", stacklevel=3)
+  return {k: v for k, v in values.items() if k in declared}
+
+
+def construct(cls: type, values: Mapping[str, Any], *, path: str = "", strict: bool = True):
+  """Construct ``cls`` recursively, rejecting unknown keys and bad types (or, with
+  `strict=False`, warning about and dropping unknown keys). A config with a
+  `variants` registry is built as the variant its `class_name` names."""
   if not isinstance(values, Mapping):
     raise TypeError(f"{path or 'config'} must be a mapping, got {type(values).__name__}")
   if hasattr(cls, "variants") and "class_name" in values:
     cls = _variant(cls, values["class_name"], path)
   declared = {f.name for f in fields(cls) if f.init}
-  unknown = sorted(set(values) - declared)
-  if unknown:
-    raise KeyError(f"{path or cls.__name__}: unknown keys {unknown}; "
-                   f"available keys: {sorted(declared)}")
+  values = drop_unknown(values, declared, path=path or cls.__name__, strict=strict)
   hints = get_type_hints(cls)
   kwargs = {}
   for f in fields(cls):
@@ -100,7 +115,7 @@ def construct(cls: type, values: Mapping[str, Any], *, path: str = ""):
     expected = hints.get(f.name, f.type)
     nested = _dataclass_type(expected)
     if nested is not None:
-      kwargs[f.name] = construct(nested, value, path=key)
+      kwargs[f.name] = construct(nested, value, path=key, strict=strict)
     elif not is_instance(value, expected):
       raise TypeError(f"{key} has wrong type: expected {type_name(expected)}, "
                       f"got {type(value).__name__} = {value!r}")
@@ -109,19 +124,18 @@ def construct(cls: type, values: Mapping[str, Any], *, path: str = ""):
   return cls(**kwargs)
 
 
-def merge(instance, values: Mapping[str, Any], *, path: str = ""):
-  """Strictly apply a nested mapping to an immutable dataclass."""
+def merge(instance, values: Mapping[str, Any], *, path: str = "", strict: bool = True):
+  """Apply a nested mapping to an immutable dataclass; unknown keys raise unless
+  `strict=False`, which warns and drops them."""
   if not isinstance(values, Mapping):
     raise TypeError(f"{path or 'config'} must be a mapping, got {type(values).__name__}")
   if hasattr(instance, "variants") and values.get("class_name", instance.class_name) != instance.class_name:
     # Switching variants starts from the new variant's defaults; the old one's
     # fields do not carry over.
-    return construct(_variant(type(instance), values["class_name"], path), values, path=path)
+    return construct(_variant(type(instance), values["class_name"], path), values, path=path,
+                     strict=strict)
   declared = {f.name for f in fields(instance) if f.init}
-  unknown = sorted(set(values) - declared)
-  if unknown:
-    raise KeyError(f"{path or type(instance).__name__}: unknown keys {unknown}; "
-                   f"available keys: {sorted(declared)}")
+  values = drop_unknown(values, declared, path=path or type(instance).__name__, strict=strict)
   hints = get_type_hints(type(instance))
   updates = {}
   for f in fields(instance):
@@ -131,7 +145,7 @@ def merge(instance, values: Mapping[str, Any], *, path: str = ""):
     value = values[f.name]
     current = getattr(instance, f.name)
     if is_dataclass(current) and isinstance(value, Mapping):
-      updates[f.name] = merge(current, value, path=key)
+      updates[f.name] = merge(current, value, path=key, strict=strict)
     elif not is_instance(value, hints.get(f.name, f.type)):
       raise TypeError(f"{key} has wrong type: expected {type_name(hints.get(f.name, f.type))}, "
                       f"got {type(value).__name__} = {value!r}")

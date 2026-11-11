@@ -220,18 +220,18 @@ class _Counting(gym.Env):
             self.t == self.term_at, self.t == 5, {})
 
 
-class _ChunkedPolicy:
-  def __init__(self, chunks):
-    self._chunks = [np.asarray(c, np.float32) for c in chunks]
+class _ScriptedPolicy:
+  action_dim = 1
+
+  def __init__(self, actions):
+    self._actions = np.asarray(actions, np.float32).reshape(-1, 1)
     self._i = 0
-    self.chunk_size = len(self._chunks[0])
-    self.action_dim = self._chunks[0].shape[-1]
 
   def inference_fn(self):
     def infer(obs, key):
-      chunk = self._chunks[min(self._i, len(self._chunks) - 1)]
+      action = self._actions[min(self._i, len(self._actions) - 1)]
       self._i += 1
-      return chunk[None, ...].repeat(obs.shape[0], axis=0), {}
+      return action[None, ...].repeat(obs.shape[0], axis=0), {}
     return infer
 
 
@@ -271,41 +271,28 @@ def test_rollout_restarts_episode_after_boundary():
   assert f["obs"][1::2][5, 0] == 0.0     # after truncation
 
 
-def test_rollout_executes_chunked_actions_and_discards_done_tail():
+def test_rollout_stores_one_transition_per_step_with_the_executed_action():
   env = _Counting(term_at=2)
   buffer = ReplayBuffer(100)
-  policy = _ChunkedPolicy([
-    [[0.0], [0.25], [0.5]],
-    [[-0.25], [-0.5], [-0.75]],
-    [[0.75], [0.5], [0.25]],
-  ])
+  policy = _ScriptedPolicy([0.0, 0.25, 0.5, -0.25, -0.5])
 
   Collector().collect(policy, env, n_steps=5, seed=0, sink=buffer)
-  # One replay row per completed/cut-short chunk, not per primitive step.
-  assert buffer.n_transitions == 2
-  plans = buffer._fields["act"][:buffer.n_transitions]
-  assert plans.shape == (2, 3)
-  assert np.allclose(plans[0], [0.0, 0.25, 0.5])
-  assert np.allclose(plans[1], [-0.25, -0.5, -0.75])
-  assert np.allclose(buffer._fields["chunk_return"][:buffer.n_transitions], [3.0, 3.0])
-  assert np.allclose(buffer._fields["next_obs"][:buffer.n_transitions, 0], [2.0, 2.0])
-  assert np.allclose(buffer._fields["term"][:buffer.n_transitions], [1.0, 1.0])
-  assert np.array_equal(buffer._fields["horizon"][:buffer.n_transitions], [2, 2])
+  n = buffer.n_transitions
+  assert n == 5
+  fields = {k: v[:n] for k, v in buffer._fields.items()}
+  assert np.allclose(fields["act"][:, 0], [0.0, 0.25, 0.5, -0.25, -0.5])
+  assert np.allclose(fields["chunk_return"], [1.0, 2.0, 1.0, 2.0, 1.0])
+  assert np.allclose(fields["term"], [0.0, 1.0, 0.0, 1.0, 0.0])
+  assert np.array_equal(fields["horizon"], np.ones(n))
 
 
-def test_collector_chunk_return_matches_hand_computed_discount():
-  """The directive's own worked example at the collector layer: `_Counting`'s
-  reward is `t`, i.e. exactly [1,2,3] over 3 steps; gamma=0.5 ->
-  chunk_return = 1 + 0.5*2 + 0.25*3 = 2.75. The objective layer's half of the
-  same example is
-  tests/test_critics.py::test_bellman_target_matches_hand_computed_chunk_return."""
-  env = _Counting(term_at=99)   # never terminates within 3 steps
-  buffer = ReplayBuffer(100)
-  policy = _ChunkedPolicy([[[0.0], [0.0], [0.0]]])
-  Collector().collect(policy, env, n_steps=3, seed=0, discount=0.5, sink=buffer)
-  assert buffer.n_transitions == 1
-  assert buffer._fields["chunk_return"][0] == pytest.approx(2.75, abs=1e-6)
-  assert buffer._fields["horizon"][0] == 3
+def test_policy_returning_the_wrong_action_shape_is_rejected():
+  env = _Counting(term_at=2)
+  policy = _ScriptedPolicy([0.0])
+  infer = policy.inference_fn()
+  policy.inference_fn = lambda: (lambda obs, key: (infer(obs, key)[0][:, None, :], {}))
+  with pytest.raises(ValueError, match="expected"):
+    Collector().collect(policy, env, n_steps=1, seed=0, sink=ReplayBuffer(10))
 
 
 @pytest.mark.parametrize("per_run", [1, 4])

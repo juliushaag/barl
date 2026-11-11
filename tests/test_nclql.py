@@ -33,7 +33,7 @@ def _sample(dim, **config):
     action, entropy = actor.generate_action(obs, critic=critic, key=key)
   diagnostics = collect(nnx.pop(actor, nnx.Intermediate))
   assert entropy is None
-  assert action.shape == (256, 1, dim)
+  assert action.shape == (256, dim)
   assert bool(jnp.all(jnp.isfinite(action)))
   assert bool(jnp.all(jnp.abs(action) <= 1.))
   return action, diagnostics
