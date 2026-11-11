@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 # Deliberately does not `uv sync` the project: that pulls jax[cuda13] and every

@@ -1,257 +1,73 @@
-# barl_jax
+<p align="center">
+  <img src="docs/assets/banner.png" alt="BARL — Best Adaptations Reinforcement Learning" width="100%">
+</p>
 
-A JAX/Flax-NNX research framework for online off-policy actor-critic learning.
-SAC, TD3, AMDP, DIME, SDAC and NCLQL share configuration, collection, replay,
-evaluation and execution infrastructure.
+<p align="center">
+  <a href="https://github.com/juliushaag/barl/actions/workflows/ci.yml"><img src="https://github.com/juliushaag/barl/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.11-blue" alt="Python ≥ 3.11">
+  <img src="https://img.shields.io/badge/JAX-Flax%20NNX-orange" alt="JAX / Flax NNX">
+  <img src="https://img.shields.io/badge/lint-ruff-261230" alt="ruff">
+</p>
 
-## Development
+**BARL** is a JAX / Flax-NNX research framework for online, off-policy actor-critic
+reinforcement learning. Every algorithm is a combination of interchangeable
+components (an actor, a critic, an optional entropy regulator) on one shared
+training loop, so swapping a diffusion actor for a Gaussian one, or a C51 critic for a
+flow-matching one, is a one-line config change.
+
+- **Seven algorithms, one training step.** SAC, TD3, AMDP, DIME, SDAC, SDAC (paper
+  version) and NCLQL share the same collection, replay, evaluation and checkpointing code.
+- **Swappable critics.** Scalar, ensemble, HL-Gauss, C51 and flow-matching (floq) critics.
+  They can be combined with polyak or CrossQ-style targets, XQC weight normalization and
+  noise-conditioned TD.
+- **Multi-seed by default.** Seeds are `vmap`ped within a single run on one device.
+- **Inference-time action selection.** Best-of-N, top-k, mean, median and perturbation
+  executors, all independent of the policy.
+- **Simulators.** MuJoCo (Gymnasium), DeepMind Control, HumanoidBench, ManiSkill and MyoSuite.
+- **Sweeps anywhere.** One CLI expands grids and runs them locally, in tmux, or on Slurm.
+- **Full resume.** Optimizer state, replay buffer, RNGs and counters are restored on resume.
+
+## Contents
+
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [Algorithms](#algorithms)
+- [Components](#components)
+- [Running experiments](#running-experiments)
+- [Project layout](#project-layout)
+- [Documentation](#documentation)
+- [Development](#development)
+
+## Installation
+
+BARL uses [uv](https://docs.astral.sh/uv/). The full environment includes CUDA JAX and
+every simulator family. HumanoidBench is installed from a git submodule.
 
 ```bash
+git clone --recursive https://github.com/juliushaag/barl.git
+cd barl
 uv sync
-uv run pytest tests/ -q
 ```
 
-The project environment includes the simulator families and CUDA dependencies
-used for experiments. HumanoidBench is installed from the `third_party/humanoid-bench`
-submodule (`git submodule update --init` before `uv sync`), with the compatibility
-constraints declared in `pyproject.toml`.
+Cloned without `--recursive`? Run `git submodule update --init` before `uv sync`.
 
-```bash
-uv build --wheel
-```
+## Quickstart
 
-`uv run ruff check .` lints the first-party tree (`third_party/`, `wandb/`, `sweeps/`
-and `checkpoints/` are excluded); the rule set is deliberately small for now
-(syntax errors, pyflakes, import sorting -- see `[tool.ruff]` in `pyproject.toml`).
-
-The command-line tools live in `scripts/`:
-
-- `scripts/submit.py`: build a grid (or replay a saved config) and hand each run off
-  to an executor -- local, tmux, or Slurm. It never trains or evaluates anything
-  itself.
-- `scripts/train.py`: run one experiment config's entries -- the actual training
-  loop, invoked by submit.py's executors, and directly runnable to replay one
-  saved run.
-- `scripts/evaluate.py`: evaluate a checkpoint, run directory, or sweep under any
-  of the action-selection modes below -- same role as train.py for evaluation,
-  and likewise invoked by submit.py's executors for a batched `--from-sweep`/
-  `--eval-config` submission.
-- `scripts/debug.py`: report package/backend diagnostics and resolved model settings;
-  `--json` produces output suitable for sharing with an LLM.
-- `scripts/egl_probe.py`: diagnose headless EGL rendering failures on a compute node.
-
-```bash
-uv run python scripts/debug.py --model SAC --json
-uv run python scripts/debug.py --probes
-uv run python scripts/evaluate.py sweeps/<submission> --mode default mean --json
-```
-
-CI runs Ruff, the CPU test suite, an installed-wheel import check, and the CPU
-example, installing the package with `--no-deps` plus a CPU-only dependency set. Slurm/tmux executor support lives in the top-level
-`launch/` package (not part of the installed library); it is an implementation detail of `submit.py`, which shells
-out to train.py/evaluate.py exactly as a human running one of them directly
-would.
-
-`examples/cpu_quickstart.py` is a complete round trip on CPU only, no
-accelerator, W&B account, simulator download, or render dependency: a tiny
-environment (gymnasium's own `Pendulum-v1`, selected via the external
-`module:Class` path rather than the central registry), a real policy,
-collector, replay, training steps, a policy checkpoint save/load, and a
-training resume that verifies the restored optimizer/policy state and replay
-contents are bit-identical to the original run's. ~15-20s end to end on a
-laptop CPU (first-compile cost is reported separately from warm steps in its
-own output; recompute before repeating that number elsewhere).
+A complete CPU-only round trip: no GPU, W&B account or simulator download needed. It
+trains on Gymnasium's `Pendulum-v1`, saves and reloads a checkpoint, and checks that a
+resumed run is bit-identical to the original.
 
 ```bash
 BARL_ALLOW_CPU=1 uv run python -m examples.cpu_quickstart
 ```
 
-## Running experiments
-
-`scripts/submit.py` expands configurations before handing commands to the local,
-tmux or Slurm executor. Seeds are vmapped within each run. Grid settings use `run.<key>` axes; the
-obsolete grid `base:` field is rejected. `--config` replays a saved experiment
-in the foreground and accepts only `--seeds` as an override.
+Train SAC on HalfCheetah with three seeds:
 
 ```bash
-uv run python scripts/submit.py --algos SAC NCLQL --envs HalfCheetah --seeds 3 --dry-run
-uv run python scripts/submit.py --algos SAC --envs HalfCheetah --executor local --validate
-uv run python scripts/debug.py --model SAC --json
-uv run python scripts/submit.py --config sweeps/<submission>/<run>/config.yaml
+uv run python scripts/submit.py --algos SAC --envs HalfCheetah --seeds 3 --executor local
 ```
 
-### MyoSuite
-
-`uv sync` installs MyoSuite 2.12.2 on Python 3.11–3.13. Twelve standard MyoBase
-tasks are registered, including `MyoElbowPose1D6MRandom`, `MyoFingerReachRandom`,
-`MyoHandPoseRandom`, `MyoHandReachRandom`, `MyoLegStandRandom`, and `MyoLegWalk`.
-They use the existing training, replay, evaluation, and checkpoint interfaces.
-
-```bash
-uv run python scripts/submit.py --algos SAC --envs MyoHandReachRandom --seeds 3 --dry-run
-```
-
-The adapter seeds randomized targets before reset, reports MyoSuite's episode
-success metric, and renders evaluation videos lazily. See [docs/myosuite.md](docs/myosuite.md)
-for task names, dependency compatibility, and critic reward supports.
-
-### NCLQL action sampling
-
-NCLQL caps coarse Langevin step sizes at `model.components.actor.max_step_size=0.001`
-to reduce action saturation while preserving the finest step size. Both the drift
-and Gaussian noise use the capped step. Set this field to `null` to restore the
-unrestricted schedule. See [docs/nclql.md](docs/nclql.md) for tuning and clipping metrics.
-
-### Flow-matching critic (floq)
-
-The optional `FloqCritic` implements the scalar flow-matching critic from [arXiv:2509.06863](https://arxiv.org/abs/2509.06863). Select it for SAC, AMDP, DIME, or SDAC with a model override; the existing actor, replay, and policy interfaces remain unchanged. The default uses 8 Euler flow steps, 8 random target-noise samples, a 51-edge HL-Gauss (50 histogram features) interpolant encoding with `sigma=16.0`, and a 64-dimensional Fourier time encoding (`Cos` is available for the reference's `cos(t)`). See [docs/floq.md](docs/floq.md) for equations, adaptation details, defaults, and validation requirements.
-
-```bash
-uv run python scripts/submit.py --algos SAC --envs HalfCheetah --seeds 3 --set model.components.critic.class=FloqCritic
-uv run python scripts/submit.py --algos AMDP --envs HalfCheetah --seeds 3 --set model.components.critic.class=FloqCritic --set model.components.critic.flow_steps=4
-uv run python scripts/debug.py --model SAC --json --set components.critic.class=FloqCritic
-```
-
-By default (`distill=true`) actors price through a distilled Q-ensemble of the same width/depth, regressed onto the flow's mean return under fresh random noise with a stop-gradient target (the field trains on flow matching alone), so actor cost does not depend on `flow_steps`. With `distill=false` the flow critic instead differentiates through its Euler chain during SAC and AMDP actor updates, so actor cost grows with `flow_steps`. Compare 4, 8, and 16 at matched seeds and report wall-clock cost; larger flow budgets can have diminishing returns.
-
-The training CLI requires an accelerator. Set `BARL_ALLOW_CPU=1` for intentional
-CPU smoke tests. Rendering uses EGL by default in the training CLI.
-
-Every run config is preflight-checked (`barl_jax.config.run.validate_run` and the
-typed model config's own checks) before an environment, a
-policy, or a JAX device buffer is allocated -- an invalid `total_env_steps`,
-`checkpoint_mode`, `lr_decay`, etc. fails immediately with the offending key,
-value and violated rule, not partway through setup.
-
-`logger:` selects the reporting sink -- `wandb` (default), `local` (the same
-live terminal panel, with metrics/summary written as strict JSON under the
-run directory instead of shipped to wandb), or `none` (step bookkeeping only,
-for a training smoke test with no reporting backend at all). Only `wandb`
-imports the `wandb` package. A run's `objective.json` (`trainer._write_objective`) is strict JSON too: a seed with no
-completed evaluation is `null` there, not a non-finite float, with
-`objective_reason` saying why.
-
-Algorithm defaults live in typed dataclasses beside their implementations
-(`StochasticActorConfig`, `C51CriticConfig`, ... with `config_type`, the
-single source of truth for that component -- `config/schemas.py` stays
-generic model/components scaffolding and never redeclares them); policy YAML
-files are no longer required. MLP settings are grouped under one nested `mlp`
-dataclass on actors and critics, read back as
-`self.config.mlp.activation`/`self.config.mlp.norm`/... There is no capacity-tier
-selector; set width/depth directly. For example, change an activation with
-`--set model.components.actor.mlp.activation=silu`, or widen a critic with
-`--set model.components.critic.latent_dim=1024`.
-
-Hidden linear layers initialize for the activation that follows them: He-style
-fan-in scaling for ReLU/ReLU6/leaky ReLU, Xavier with gain 5/3 for tanh, and
-fan-in scaling with approximate unit-Gaussian second-moment gains for
-SiLU/GELU/Mish. Bare linear projections retain LeCun normal initialization.
-All linear biases start at zero. MLP, SimBa, and AdaLNSimBa output heads use
-`mlp.head_gain=0.01` by default; for example,
-`--set model.components.actor.mlp.head_gain=0.1` changes that kernel gain.
-Fourier time embeddings use GELU initialization for their hidden projection
-and an unscaled linear output projection. AMDP/DIME still override their
-field heads to exactly zero. XQC's unit-norm weight projection overrides
-kernel gains, including the small head gain.
-
-### Action selection at inference time
-
-`RunConfig.collection_executor`/`eval_executor` each select, independently,
-an `ActionExecutor` (`barl_jax/executors/`) that sits between a policy's
-candidate generation and the env, at every inference call -- policy-
-independent (no executor branches on SAC/AMDP/DIME/SDAC/NCLQL). Each is a
-registered component (`class:` in YAML, `get_executor()` at runtime) with
-its own typed config declaring only the fields it uses:
-
-- `DirectExecutor` (the default) -- one unchanged inference call, bit-
-  identical to not passing an executor at all; its config has no
-  `num_candidates` field at all, so it cannot be pointed at one.
-- `MeanExecutor` (`num_candidates`) -- samples `num_candidates` action plans
-  and averages them elementwise. Continuous (box) action spaces only; can
-  land between modes of a multimodal policy, so treat it as a research
-  strategy, not an automatic improvement.
-- `MedianExecutor` (`num_candidates`) -- like `MeanExecutor`, but the
-  elementwise median: unmoved by a single wild candidate the way an average
-  would be. Continuous action spaces only.
-- `AxisShuffleExecutor` (`num_candidates`) -- samples `num_candidates` plans
-  and, independently for every `(batch, chunk, act_dim)` entry, takes the
-  value from a randomly chosen candidate -- a per-axis recombination of all
-  N, not any one candidate's action. Needs no critic; works for discrete
-  action spaces too (it only ever copies a real candidate's value, never
-  blends one).
-- `BestOfNExecutor` (`num_candidates`) -- samples `num_candidates` plans and
-  keeps the highest-scoring one under the policy's own critic (`Policy.score`,
-  `Policy.supports_bon` -- SAC/AMDP/DIME/SDAC via `RLPolicy`; NCLQL has none
-  and is rejected at preflight with an actionable message, same as any
-  algorithm without a scorer).
-- `TopKExecutor` (`num_candidates`, `top_k`) -- BoN generalized: averages the
-  `top_k` highest-scoring candidates instead of hard-selecting one, softening
-  BoN's failure mode of exploiting a miscalibrated critic's noise on a single
-  winner. `top_k=1` behaves like `BestOfNExecutor`; `top_k=num_candidates`
-  behaves like `MeanExecutor`. Needs a scorer; blends elementwise
-  (continuous-only) whenever `top_k > 1`.
-- `PerturbExecutor` (`num_candidates`, `sigma`) -- one base action plus
-  `num_candidates - 1` local Gaussian perturbations of it (std `sigma`,
-  clipped back to a valid action), scored and BoN-selected. Since the base
-  action is always in the pool, the winner can never score worse than not
-  perturbing at all -- a local search around the policy's own proposal,
-  handy when independent resampling (`BestOfNExecutor`) barely moves the
-  action (e.g. a near-deterministic policy late in training). Needs a scorer.
-
-All are validated before any resource is allocated: an unknown `class` or a
-bad `num_candidates`/`top_k`/`sigma` value in `barl_jax.config.run.validate_run`
-(each executor config's own `__post_init__`/unknown-field rejection), and the
-capability/action-space checks (`ActionExecutor.validate`) as soon as
-`trainer.setup()` has a constructed reference policy. `collection_executor` is
-part of the training config (changing it is a behavior-policy change, so
-resume rejects a mismatch); `eval_executor` may change across a resume.
-
-### Evaluation RNG
-
-Each `evaluate()` call owns an `eval_seed` (`barl_jax.seeding.derive_seed(base_seed,
-"eval", eval_count)`, logged at eval start) independent of every training RNG
-stream (policy, collector, replay) -- evaluation never perturbs a training
-trajectory, and running the same config from the same seed reproduces the same
-eval episodes at the same iteration. `run_episodes()` derives both the
-policy's action key and every wave's `env.reset(seed=...)` from that one
-seed; a later wave (or a mid-wave slot refill) never replays an earlier one's
-episode. `eval_count` is not restored on resume, consistent with resume's
-existing "environment episodes restart" semantics.
-
-## Extending the framework
-
-- `components.py` defines actors, critics, configuration declarations and NNX
-  state utilities. Low-level components do not import the policy runtime.
-- `policies/` composes components and defines algorithm behavior. Critic losses
-  live in `critics/`: `QCritic` owns TD, the target net, ensemble reduction and
-  noise-conditioned TD; each value head (`DirectCritic`, `HLGaussCritic`,
-  `C51Critic`) supplies only its representation-specific target and regression.
-  `SLOT_OBJECTIVES` validates compatibility before construction.
-- `optimization.py` assembles parameter ownership, update cadence and schedules.
-- `collection.py` owns environment/chunk state and emits transitions into an
-  injected sink. `replay.py` owns replay storage and independent sampling RNGs.
-- `evaluation.py` evaluates action providers; `multiseed.py` stacks independent
-  policies and optimizers. `trainer.py` coordinates their lifecycle.
-- `checkpoints.py` restores policy architectures from saved metadata;
-  `training_checkpoint.py` handles optimizer/replay/counter restoration.
-
-Importing `barl_jax` or its config toolkit does not initialize JAX or simulators.
-Registry lookups load built-ins on demand. Environment-family imports expose
-metadata; simulator dependencies load when `get_env()` runs. External policy,
-component and environment classes can be selected with `module:Class` paths.
-Async environments pickle their bound factory, preserving instance settings;
-the factory and its class must be importable in the worker process.
-
-Three ways to name a Policy/Environment/component implementation, tried in
-order: a built-in name; an installed plugin -- an entry point under
-`barl_jax.policies`/`barl_jax.environments`/`barl_jax.components` in another
-distribution's `pyproject.toml` (`[project.entry-points."barl_jax.policies"]`),
-discovered once per process and loaded only when actually selected; or
-`module:Class`, unaffected by what plugins are installed. A name shared by a
-built-in and a plugin, or by two plugins, is a deterministic error at lookup
-time, not a silent precedence rule.
-
-For independent in-process experiments, pass configuration explicitly:
+Or use BARL as a library:
 
 ```python
 from barl_jax.config.run import RunConfig
@@ -264,53 +80,110 @@ run = RunConfig.from_dict({
 policy = Policy.make("SAC", env, run.model_config, env_stats=env_stats)
 ```
 
-`RunConfig.model_config` is the complete typed model (policy params and component
-configs). Policies retain it as `policy.config`; it is frozen, so later config
-changes cannot affect their components. `chunk_size` is a policy param
-(`model.params.chunk_size`), not a run key. Import contracts, checkpoint functions and inference utilities from
-their owning modules. Older checkpoint formats are rejected explicitly.
+## Algorithms
 
-Observation normalization is off by default. With `model.params.normalize_obs=true`,
-running moments are updated from each training batch before the objective runs;
-inference reads those moments without updating them.
+| Model       | Actor                                    | Entropy tuning | Reference |
+|-------------|------------------------------------------|:--------------:|-----------|
+| `SAC`       | Tanh-squashed Gaussian                   | ✓ | Haarnoja et al., 2018 |
+| `TD3`       | Deterministic + target smoothing         |   | Fujimoto et al., 2018 |
+| `AMDP`      | Controlled-SDE diffusion, adjoint matching | ✓ | [arXiv:2409.08861](https://arxiv.org/abs/2409.08861) |
+| `DIME`      | Diffusion sampler with a learned SDE      | ✓ | Celik et al., 2025 |
+| `SDAC`      | DDPM, reverse-sampling score matching     |   | Ma et al., 2025 |
+| `SDACPaper` | DDPM, as released with the paper          | ✓ | Ma et al., 2025 |
+| `NCLQL`     | Annealed Langevin sampling on the critic  |   | [docs/nclql.md](docs/nclql.md) |
 
-## Checkpoints
+Each model's defaults are typed dataclasses next to its implementation. Override any
+field with `--set`:
 
-Policy checkpoints (`latest`, `best`, `final`) contain policy state and a
-versioned architecture snapshot. They are suitable for inference or initializing
-a new run. With `checkpoint_mode: weights` (the default), optimizer/replay and
-training counters start fresh; saved normalization and target weights are kept.
-Each requested seed receives an independent policy RNG.
-
-Training writes `checkpoints/resume/` on its own cadence (`resume_every` env
-steps, independent of `eval_every` -- the replay dump it carries, not the
-eval, is what makes a save expensive) and again on normal completion. Each
-save is an immutable, numbered generation (`resume/gen-000003/`, ...)
-published via `resume/pointer.json` only once fully written; `resume_keep`
-(default 2) is how many generations are then kept -- older ones are deleted
-only after the new one is committed, so an interrupted or out-of-disk save
-never leaves the previous generation as collateral damage. To continue an
-interrupted run, use its original configuration with:
-
-```yaml
-checkpoint: /absolute/path/to/checkpoints/resume
-checkpoint_mode: resume
+```bash
+uv run python scripts/submit.py --algos SAC --envs HalfCheetah \
+  --set model.components.actor.mlp.activation=silu \
+  --set model.components.critic.latent_dim=1024
 ```
 
-Resume restores all seeds, optimizer moments/schedules, replay contents and RNGs,
-normalization state, counters and best scores. The original training parameters,
-seed count and replay capacity must match. Output paths, logging/evaluation
-cadences, `logger:`, and `resume_every`/`resume_keep` may change. Saved model
-snapshots take precedence over current defaults.
+## Components
 
-Environment episodes restart on resume. Partial action chunks are discarded;
-completed replay transitions remain intact. This is training-state continuation,
-not bit-identical simulator trajectory continuation. A failed iteration retains
-the last completed resume generation; `final` policy weights may be newer.
-Full replay checkpoints can be large, so account for their storage and I/O cost --
-`save_training` refuses to start a new generation when free disk looks
-insufficient to hold it alongside the previous one.
+| Slot | Built-in options |
+|------|------------------|
+| **Critic** | `DirectCritic`, `EnsembleCritic`, `HLGaussCritic`, `C51Critic`, `FloqCritic` ([docs](docs/floq.md)) |
+| **Critic presets** | `target_ensemble`, `xqc`, `nclql` |
+| **Networks** | `MLP`, `SimBa`, `AdaLNSimBa`; norms: `none`, `layer`, `batch`, `batchrenorm` |
+| **Squash** | `TanhSquash`, `ErfSquash` |
+| **Entropy** | `AutotuneRegulator` (per-chunk or per-action α) |
+| **Executors** | `DirectExecutor`, `MeanExecutor`, `MedianExecutor`, `AxisShuffleExecutor`, `BestOfNExecutor`, `TopKExecutor`, `PerturbExecutor` ([docs](docs/executors.md)) |
 
-Use `with setup(config, num_seeds) as run:` when managing a run directly. The
-public `train` and `validate` functions close owned resources on success or
-failure, including failures during initialization and warmup.
+You can also select your own classes with a `module:Class` path or through an installed
+plugin entry point. See [docs/extending.md](docs/extending.md).
+
+## Running experiments
+
+`scripts/submit.py` expands a grid and hands each run to an executor (`local`, `tmux` or
+`slurm`). It never trains anything itself; it calls `scripts/train.py` and
+`scripts/evaluate.py`, just as you would run them by hand.
+
+```bash
+# Preview a grid without running it
+uv run python scripts/submit.py --algos SAC NCLQL --envs HalfCheetah --seeds 3 --dry-run
+
+# Run a committed experiment grid
+uv run python scripts/submit.py --grid experiments/sac_floq_critic.yaml --seeds 2 --executor tmux
+
+# Replay one saved run
+uv run python scripts/submit.py --config sweeps/<submission>/<run>/config.yaml
+
+# Evaluate a sweep under several action-selection strategies
+uv run python scripts/evaluate.py sweeps/<submission> --mode DirectExecutor MeanExecutor --json
+```
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/submit.py`   | Build grids and dispatch runs (local / tmux / Slurm) |
+| `scripts/train.py`    | Train one experiment config |
+| `scripts/evaluate.py` | Evaluate a checkpoint, run directory or sweep |
+| `scripts/debug.py`    | Package/backend diagnostics and resolved model settings (`--json`) |
+| `scripts/egl_probe.py`| Diagnose headless EGL rendering on a compute node |
+
+Training requires an accelerator unless `BARL_ALLOW_CPU=1` is set. The `logger:` key
+selects `wandb` (default), `local` (JSON under the run directory) or `none`.
+
+## Project layout
+
+```
+src/barl_jax/
+  actors/        actor implementations and their per-algorithm policies
+  critics/       value heads, targets, ensembles and presets
+  networks/      MLP, SimBa, norms, time embeddings, squashes, schedules, entropy regulator
+  policies/      the shared actor-critic training template
+  executors/     inference-time action selection
+  environments/  simulator families (gym, dm_control, humanoid_bench, mani_skill, myosuite)
+  config/        typed run and model configuration
+  trainer.py     run lifecycle: collection, replay, updates, evaluation, checkpoints
+launch/          tmux and Slurm backends used by submit.py
+scripts/         command-line entry points
+experiments/     committed sweep grids
+examples/        CPU quickstart
+```
+
+## Documentation
+
+| Topic | |
+|-------|-|
+| Configuration, validation, initialization, evaluation RNG | [docs/configuration.md](docs/configuration.md) |
+| Inference-time action executors | [docs/executors.md](docs/executors.md) |
+| Checkpoints and exact resume | [docs/checkpoints.md](docs/checkpoints.md) |
+| Architecture, plugins and custom components | [docs/extending.md](docs/extending.md) |
+| Flow-matching critic (floq) | [docs/floq.md](docs/floq.md) |
+| NCLQL action sampling | [docs/nclql.md](docs/nclql.md) |
+| MyoSuite tasks | [docs/myosuite.md](docs/myosuite.md) |
+
+## Development
+
+```bash
+uv run pytest tests/ -q      # test suite (pytest-xdist, -n 4 by default)
+uv run ruff check .          # lint
+uv build --wheel             # build the package
+```
+
+CI runs ruff, the CPU test suite, an installed-wheel import check and the CPU quickstart.
+It installs the package without its dependencies, plus a CPU-only dependency set, so it
+needs no CUDA or simulator downloads.
