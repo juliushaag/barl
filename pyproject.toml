@@ -79,9 +79,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# -n 4 is the sweet spot measured on this box: XLA's own compilation is already
-# multi-threaded, so more workers just duplicate imports. Use `-n 0` to debug.
-addopts = "-n 4"
+# One worker per core: the suite is dominated by single-threaded Python tracing,
+# so -n auto (12 here) runs it in ~75s against ~125s at -n 4. Use `-n 0` to debug.
+# `slow` (full training / launcher end-to-end runs) is skipped by default:
+# `pytest -m slow` runs only those, `pytest -m ""` runs everything.
+addopts = "-n auto -m 'not slow'"
+markers = ["slow: full training or launcher end-to-end runs, skipped by default"]
 pythonpath = ["."]
 
 [tool.ruff]

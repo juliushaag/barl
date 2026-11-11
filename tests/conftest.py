@@ -36,6 +36,7 @@ from flax import nnx
 
 import barl_jax  # noqa: F401  -- import side effects populate the registry
 from barl_jax.components import Actor, Critic
+from barl_jax.config.schemas import model_schema
 from barl_jax.critics import crossq_mlp, target_mlp
 from barl_jax.env import EnvStats
 from barl_jax.networks.schedule import Schedule
@@ -193,6 +194,16 @@ VARIANTS = _variant_grid()
 def build_variant(variant_id: str, **extra):
     head, overrides = VARIANTS[variant_id]
     return build(head, **_deep_merge(overrides, extra))
+
+
+def tiny_model(name: str, **overrides):
+    """`name`'s typed model defaults with every slot narrowed by `TINY`, as
+    `build` narrows a lone component: a policy at its shipped width (a 2048-wide
+    critic) costs seconds per CPU step for nothing a test checks."""
+    model = model_schema(name)()
+    slots = {slot: dict(TINY) for slot, config in model.components.present().items()
+             if all(hasattr(config, key) for key in TINY)}
+    return model.overridden(_deep_merge({"components": slots}, overrides))
 
 
 def target_expectation(critic, target):

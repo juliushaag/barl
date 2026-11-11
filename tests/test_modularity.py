@@ -200,6 +200,7 @@ def test_validation_failure_closes_run(tmp_path, monkeypatch):
   assert all(env.closed for env in family.created)
 
 
+@pytest.mark.slow
 def test_training_resume_restores_next_update_and_replay_rng(tmp_path, monkeypatch):
   family = ToyFamily()
   monkeypatch.setattr(Environment, "make", lambda name: family)
@@ -310,6 +311,7 @@ def test_complete_training_writes_resumable_state(tmp_path, monkeypatch):
     assert restored.progress["grad_steps"] == 4
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("kind", ["local", "none"])
 def test_training_runs_without_wandb(tmp_path, monkeypatch, kind):
   """`logger: local`/`logger: none` are real barl_jax.logger sinks, not test

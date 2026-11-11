@@ -214,6 +214,7 @@ def test_grid_materialization_freezes_overrides(tmp_path):
     assert from_yaml(tmp_path / runs[0].config).model == "SAC"
 
 
+@pytest.mark.slow
 def test_submit_eval_end_to_end_through_local_executor(tmp_path):
     """--from-sweep, all the way through: a real checkpoint on disk, a real
     LocalExecutor subprocess (scripts/evaluate.py, which a monkeypatched
@@ -259,6 +260,7 @@ def test_submit_eval_end_to_end_through_local_executor(tmp_path):
         assert math.isfinite(row["DirectExecutor"]["mean_return"])
 
 
+@pytest.mark.slow
 def test_submit_eval_config_end_to_end_through_local_executor(tmp_path):
     """--eval-config, all the way through: two checkpoints saved with no
     training-sweep tag structure at all (no config.yaml to infer env from --

@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import ACT_DIM, BATCH, OBS_DIM, make_env_stats
+from conftest import ACT_DIM, BATCH, OBS_DIM, make_env_stats, tiny_model
 from flax import nnx
 
 from barl_jax.components import TRAINABLE
@@ -33,7 +33,7 @@ class FakeEnv:
 
 
 def make(name: str) -> Policy:
-  return Policy.make(name, FakeEnv(), env_stats=make_env_stats(), seed=0)
+  return Policy.make(name, FakeEnv(), tiny_model(name), env_stats=make_env_stats(), seed=0)
 
 
 def batch():

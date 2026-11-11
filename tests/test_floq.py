@@ -158,6 +158,7 @@ def test_floq_rejects_invalid_sampling_and_encoding_config(values, problem):
     _critic(**values)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("distill", [True, False])
 def test_floq_learns_action_dependent_terminal_rewards_with_wide_return_bounds(distill):
   # A single-step MDP has Q(s,a)=r(s,a)=2*a[0]. This must actually learn;
