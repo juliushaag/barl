@@ -43,7 +43,19 @@ jobs:
       # No test renders, so MuJoCo's GL backend is switched off: with
       # MUJOCO_GL=egl `import mujoco` needs libEGL, which the runner image lacks
       # and cannot install (its apt mirrors are unreachable).
-      - run: MUJOCO_GL=disabled .venv/bin/python -m pytest tests/ -q
+      # One pytest process per test file, two workers each: a worker's memory
+      # grows with every compiled model (several GB over the whole suite), and
+      # four long-lived workers exhaust the runner. Every file runs even after
+      # a failure, so one run reports them all.
+      - name: Run tests
+        run: |
+          status=0
+          for file in tests/test_*.py; do
+            echo "::group::$file"
+            MUJOCO_GL=disabled .venv/bin/python -m pytest "$file" -q -n 2 || status=1
+            echo "::endgroup::"
+          done
+          exit $status
 
   wheel-smoke:
     runs-on: ubuntu-latest
