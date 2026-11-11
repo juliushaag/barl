@@ -202,4 +202,4 @@ class Recorder:
       return
     num = sum(((p - q) ** 2).sum() for p, q in zip(src, tgt))
     den = sum((p ** 2).sum() for p in src)
-    self._put(f"{name}/gap", jnp.sqrt(num / jnp.maximum(den, 1e-24)))
+    self._put(f"{name}/gap" if name else "gap", jnp.sqrt(num / jnp.maximum(den, 1e-24)))

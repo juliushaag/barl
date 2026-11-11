@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from barl_jax.checkpoints import checkpoint_directory
+from barl_jax.compat import TRAINING_VERSION, check_version, restore_state
 from barl_jax.result import write_json_atomic
 
 # `read_training`/`validate_resume` are pure metadata readers -- json and
@@ -26,11 +27,8 @@ from barl_jax.result import write_json_atomic
 # `restore_training` actually construct or restore learning state and import
 # orbax and multiseed.unstack locally, where that state is built.
 
-# v3: run config dropped `profile`, `chunk_size` (now `model.params.chunk_size`)
-# and `env_metadata`, so older saved configs no longer round-trip. v2 renamed the
-# replay field `rew` -> `chunk_return`; an older replay .npz would silently
-# restore as an empty buffer. Both are rejected rather than reinterpreted.
-VERSION = 3
+# Versions and the migrations between them live in `barl_jax.compat.checkpoint`.
+VERSION = TRAINING_VERSION
 
 _GEN_PREFIX = "gen-"
 _GEN_WIDTH = 6
@@ -160,10 +158,7 @@ def read_training(root) -> dict:
     raise ValueError(f"{root}: pointer.json names generation {pointer['generation']}, "
                      f"but {gen_dir} is missing or incomplete")
   meta = json.loads(meta_path.read_text())
-  if meta.get("format_version") != VERSION:
-    raise ValueError(
-      f"Unsupported training checkpoint version {meta.get('format_version')} "
-      f"(expected {VERSION}); older resume states cannot be reinterpreted.")
+  check_version(meta.get("format_version"), kind="training")
   meta["_dir"] = str(gen_dir)
   return meta
 
@@ -191,15 +186,12 @@ def validate_resume(cfg, num_seeds, meta):
 
 
 def restore_training(run, meta) -> None:
-  import orbax.checkpoint as ocp
-
   from barl_jax.multiseed import unstack
 
   path = Path(meta["_dir"])
   if run.buffer.max_transitions != meta["capacity"]:
     raise ValueError("Resume requires the saved replay capacity")
-  with ocp.StandardCheckpointer() as ckpt:
-    run.state = ckpt.restore(path / "training_state", run.state)
+  run.state = restore_state(path / "training_state", run.state, meta["format_version"])
   for i, (buffer, saved) in enumerate(zip(run.buffer.seeds, meta["replay"])):
     with np.load(path / f"replay{i}.npz", allow_pickle=False) as archive:
       buffer.restore(_npz_to_snapshot(archive, saved))

@@ -139,9 +139,10 @@ def built(name: str):
 # bootstrap/normalization/reduction/objective choice `QCritic` accepts.
 HEADS = ("DirectCritic", "EnsembleCritic", "HLGaussCritic", "C51Critic")
 BOOTSTRAPS = {
-    "crossq": {"target": {"kind": "none", "joint_forward": True}},
-    "target": {"target": {"kind": "polyak", "joint_forward": False}},
-    "xqc": {"target": {"kind": "polyak", "joint_forward": True}, "weight_norm": True},
+    "crossq": {"target": {"class": "NoTarget", "joint_forward": True}},
+    "target": {"target": {"class": "Polyak", "joint_forward": False}},
+    "xqc": {"target": {"class": "Polyak", "joint_forward": True},
+            "constraints": [{"class": "WeightNorm"}]},
 }
 NORMS = {
     "none": {"mlp": {"norm": "none", "norm_kwargs": {}}},
@@ -149,7 +150,7 @@ NORMS = {
     "batchrenorm": {"mlp": {"norm": "batchrenorm", "norm_kwargs": crossq_mlp().norm_kwargs}},
 }
 REDUCES = {r: {"ensemble": {"value_reduce": r, "target_reduce": r}} for r in ("mean", "min")}
-OBJECTIVES = {"td": {}, "noise": {"noise": {"enabled": True}}}
+OBJECTIVES = {"td": {}, "noise": {"objective": {"class": "NoiseConditionedTD"}}}
 
 
 def _deep_merge(*dicts) -> dict:

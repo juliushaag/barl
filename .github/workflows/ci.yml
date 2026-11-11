@@ -20,19 +20,27 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-        with: {python-version: "3.11"}
-      - run: uv pip install --python 3.11 --system ruff==0.16.3
-      - run: ruff check .
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      # uvx runs ruff from its own isolated environment: no Python install needed.
+      - run: uvx ruff@0.16.3 check .
 
   cpu-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with: {python-version: "3.11"}
-      - run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1
+      # EGL for the tests that render evaluation episodes. Retried: the runner's
+      # package mirrors fail transiently (DNS) often enough to fail a whole run.
+      - name: Install EGL
+        run: |
+          for attempt in 1 2 3 4 5; do
+            sudo apt-get -o Acquire::Retries=3 update || true
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends libegl1 libgl1 && exit 0
+            echo "apt attempt $attempt failed; retrying"; sleep $((attempt * 10))
+          done
+          exit 1
       - run: uv venv --python 3.11 .venv
       - run: uv pip install --python .venv/bin/python --no-deps -e .
       # jax==0.10.0 is pinned (matches uv.lock): a couple of the vmap-vs-per-slot
@@ -47,8 +55,8 @@ jobs:
   wheel-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with: {python-version: "3.11"}
       - run: uv build --wheel --out-dir /tmp/barl-dist
       - run: uv venv --python 3.11 /tmp/barl-wheel
@@ -59,8 +67,8 @@ jobs:
   cpu-example:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with: {python-version: "3.11"}
       # examples/cpu_quickstart.py needs no simulator beyond gymnasium's own
       # classic-control Pendulum-v1, no CUDA and no W&B account.

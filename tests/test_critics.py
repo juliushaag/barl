@@ -27,6 +27,9 @@ from flax import nnx
 from barl_jax.components import TRAINABLE, frozen, is_target
 from barl_jax.config.serialization import merge
 from barl_jax.critics import presets
+from barl_jax.critics.heads import ScalarHeadConfig
+from barl_jax.critics.objectives import NoiseConditionedTDConfig
+from barl_jax.networks.constraints import apply_constraints
 from barl_jax.registration import get_component
 
 REWARD = jnp.array([-2.0, -0.5, 0.5, 2.0])          # BATCH values, well inside every support
@@ -36,8 +39,8 @@ REWARD = jnp.array([-2.0, -0.5, 0.5, 2.0])          # BATCH values, well inside 
 # usable reward at v_max*(1 - gamma), which at the shipped gamma is 0.1.
 SMALL_REWARD = jnp.array([-0.06, -0.02, 0.02, 0.06])
 ONE = jnp.ones((BATCH,))
-SCALAR = [n for n in HEADS if not hasattr(get_component(n), "probs")]
-POLYAK = [v for v, (_, o) in VARIANTS.items() if o["target"]["kind"] == "polyak"]
+SCALAR = [n for n in HEADS if isinstance(get_component(n).config_type().head, ScalarHeadConfig)]
+POLYAK = [v for v, (_, o) in VARIANTS.items() if o["target"]["class"] == "Polyak"]
 
 
 def td_losses(c, obs, act):
@@ -89,24 +92,25 @@ def test_polyak_target_tracks_the_live_net(variant):
     net -- the clone it starts as would make any blending law look correct."""
     c = build_variant(variant)
     assert jax.tree.all(jax.tree.map(jnp.array_equal, nnx.state(c.net, nnx.Param),
-                                     nnx.state(c.net_target, nnx.Param))), \
+                                     nnx.state(c.target.net_target, nnx.Param))), \
         "target does not start as the (projected) live net"
 
     nnx.update(c.net, jax.tree.map(lambda x: x + 1.0, nnx.state(c.net, nnx.Param)))
-    before = jax.tree.map(jnp.copy, nnx.state(c.net_target, nnx.Param))
+    before = jax.tree.map(jnp.copy, nnx.state(c.target.net_target, nnx.Param))
+    apply_constraints(c)            # what the owning Policy does before after_step
     c.after_step()
     live = nnx.state(c.net, nnx.Param)
 
     expected = jax.tree.map(lambda b, l: b + c.config.target.tau * (l - b), before, live)
-    for got, want in zip(jax.tree.leaves(nnx.state(c.net_target, nnx.Param)),
+    for got, want in zip(jax.tree.leaves(nnx.state(c.target.net_target, nnx.Param)),
                          jax.tree.leaves(expected)):
         assert jnp.allclose(got, want, atol=1e-5)
 
 
 def test_weight_norm_projects_every_step():
-    c = build("C51Critic", weight_norm=True)
+    c = build("C51Critic", constraints=[{"class": "WeightNorm"}])
     nnx.update(c.net, jax.tree.map(lambda x: 3.0 * x + 0.1, nnx.state(c.net, nnx.Param)))
-    c.after_step()
+    apply_constraints(c)
     members = c.net.ensemble.members
     stem = jnp.concatenate([members.stem.kernel[...], members.stem.bias[...][:, None, :]], axis=-2)
     assert jnp.allclose(jnp.linalg.norm(stem, axis=-2), 1.0, atol=1e-5)
@@ -116,20 +120,29 @@ def test_weight_norm_projects_every_step():
 @pytest.mark.parametrize("overrides", [
     {"target": {"joint_forward": False}},                        # batchrenorm needs the joint batch
     {"ensemble": {"value_reduce": "median"}},
-    {"target": {"kind": "ema"}},
+    {"target": {"class": "Polyak", "tau": 0.0}},
+    {"head": {"num_bins": 1}},
+    {"head": {"support": {"class": "LearnedSupport", "eps": 2.0}}},
 ])
 def test_invalid_compositions_are_rejected(overrides):
     with pytest.raises(ValueError):
         build("C51Critic", **overrides)
 
 
+@pytest.mark.parametrize("part", ["target", "head", "objective", "constraints"])
+def test_unknown_part_class_names_the_choices(part):
+    value = [{"class": "Nope"}] if part == "constraints" else {"class": "Nope"}
+    with pytest.raises(KeyError, match="available"):
+        build("C51Critic", **{part: value})
+
+
 @pytest.mark.parametrize("name", HEADS)
 def test_learning_objective_follows_the_noise_axis(name):
     cls = get_component(name)
     assert cls.learning_objective_for(cls.config_type()) == "td"
-    noisy = replace(cls.config_type(), noise=replace(cls.config_type().noise, enabled=True))
+    noisy = replace(cls.config_type(), objective=NoiseConditionedTDConfig())
     assert cls.learning_objective_for(noisy) == "noise_td"
-    assert not build(name, noise={"enabled": True}).supports_bon
+    assert not build(name, objective={"class": "NoiseConditionedTD"}).supports_bon
 
 
 @pytest.mark.parametrize("name", HEADS)
@@ -231,3 +244,35 @@ def test_bfloat16_heads_still_price(obs, act):
     """Low precision stays finite; the laws above are dtype-agnostic."""
     c = build("C51Critic", mlp={"dtype": "bfloat16"})
     assert finite(c.value(obs, act))
+
+
+def test_constraints_apply_to_actors_too():
+    """`constraints` is a property of every trainable component, not of critics:
+    the owning Policy projects an actor's trunk at build time and after each step."""
+    import gymnasium as gym
+    import numpy as np
+
+    from barl_jax.config.run import RunConfig
+    from barl_jax.networks.constraints import trunks
+    from barl_jax.policy import Policy
+
+    class Env:
+        observation_space = gym.spaces.Box(-np.inf, np.inf, (5,), np.float32)
+        action_space = gym.spaces.Box(-1.0, 1.0, (3,), np.float32)
+
+    run = RunConfig.from_dict({"model": "SAC", "env": "HalfCheetah", "model_overrides": {
+        "components": {"actor": {"latent_dim": 8, "constraints": [{"class": "WeightNorm"}]},
+                       "critic": {"latent_dim": 8}}}})
+    policy = Policy.make("SAC", Env(), run.model_config, env_stats=make_env_stats(), seed=0)
+    (trunk,) = trunks(policy.actor)
+
+    def unit_norm(trunk):
+        head = jnp.linalg.norm(trunk.head.kernel[...], axis=-2)
+        return bool(jnp.allclose(head, 1.0, atol=1e-5))
+
+    assert unit_norm(trunk)
+    nnx.update(trunk, jax.tree.map(lambda x: 3.0 * x, nnx.state(trunk, nnx.Param)))
+    assert not unit_norm(trunk)
+    policy.after_step()
+    assert unit_norm(trunk)
+    assert not trunks(policy.critic) or not unit_norm(trunks(policy.critic)[0])

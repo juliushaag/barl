@@ -17,9 +17,9 @@ flow-matching one, is a one-line config change.
 
 - **Seven algorithms, one training step.** SAC, TD3, AMDP, DIME, SDAC, SDAC (paper
   version) and NCLQL share the same collection, replay, evaluation and checkpointing code.
-- **Swappable critics.** Scalar, ensemble, HL-Gauss, C51 and flow-matching (floq) critics.
-  They can be combined with polyak or CrossQ-style targets, XQC weight normalization and
-  noise-conditioned TD.
+- **Critics made of parts.** Value head (scalar, C51, HL-Gauss) × fixed or learned
+  support × CrossQ-style or Polyak target × TD or noise-conditioned TD, plus the
+  flow-matching floq critic. Constraints such as XQC's weight norm work on any component.
 - **Multi-seed by default.** Seeds are `vmap`ped within a single run on one device.
 - **Inference-time action selection.** Best-of-N, top-k, mean, median and perturbation
   executors, all independent of the policy.
@@ -105,15 +105,23 @@ uv run python scripts/submit.py --algos SAC --envs HalfCheetah \
 
 | Slot | Built-in options |
 |------|------------------|
-| **Critic** | `DirectCritic`, `EnsembleCritic`, `HLGaussCritic`, `C51Critic`, `FloqCritic` ([docs](docs/floq.md)) |
-| **Critic presets** | `target_ensemble`, `xqc`, `nclql` |
+| **Critic** | `QCritic` composed of parts ([docs](docs/components.md)); preset names `DirectCritic`, `EnsembleCritic`, `HLGaussCritic`, `C51Critic`; `FloqCritic` ([docs](docs/floq.md)) |
+| **Critic parts** | head: `Scalar`, `C51`, `HLGauss` · support: `FixedSupport`, `LearnedSupport` · target: `NoTarget`, `Polyak` · objective: `TD`, `NoiseConditionedTD` |
+| **Critic recipes** | `target_ensemble`, `xqc`, `nclql` |
+| **Constraints** | `WeightNorm`, on any trainable component (`constraints: [{class: WeightNorm}]`) |
 | **Networks** | `MLP`, `SimBa`, `AdaLNSimBa`; norms: `none`, `layer`, `batch`, `batchrenorm` |
 | **Squash** | `TanhSquash`, `ErfSquash` |
 | **Entropy** | `AutotuneRegulator` (per-chunk or per-action α) |
 | **Executors** | `DirectExecutor`, `MeanExecutor`, `MedianExecutor`, `AxisShuffleExecutor`, `BestOfNExecutor`, `TopKExecutor`, `PerturbExecutor` ([docs](docs/executors.md)) |
 
-You can also select your own classes with a `module:Class` path or through an installed
-plugin entry point. See [docs/extending.md](docs/extending.md).
+Every part is chosen by `class:` at its own config path, for example
+`--set model.components.critic.head.support.class=FixedSupport`. You can also select
+your own classes with a `module:Class` path or through an installed plugin entry point.
+See [docs/components.md](docs/components.md) and [docs/extending.md](docs/extending.md).
+
+Configs and checkpoints from earlier releases keep loading. All backward-compatibility
+code lives in [`src/barl_jax/compat/`](src/barl_jax/compat/__init__.py); see
+[docs/components.md](docs/components.md#backward-compatibility).
 
 ## Running experiments
 
@@ -171,6 +179,7 @@ examples/        CPU quickstart
 | Configuration, validation, initialization, evaluation RNG | [docs/configuration.md](docs/configuration.md) |
 | Inference-time action executors | [docs/executors.md](docs/executors.md) |
 | Checkpoints and exact resume | [docs/checkpoints.md](docs/checkpoints.md) |
+| Components, critic parts, constraints, backward compatibility | [docs/components.md](docs/components.md) |
 | Architecture, plugins and custom components | [docs/extending.md](docs/extending.md) |
 | Flow-matching critic (floq) | [docs/floq.md](docs/floq.md) |
 | NCLQL action sampling | [docs/nclql.md](docs/nclql.md) |

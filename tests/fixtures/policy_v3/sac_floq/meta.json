@@ -1,0 +1,147 @@
+{
+  "format_version": 3,
+  "model": "SAC",
+  "policy_class": "SAC",
+  "policy_type": "barl_jax.actors.sac:SAC",
+  "spec": {
+    "schema_version": 1,
+    "name": "SAC",
+    "model": {
+      "policy": "SAC",
+      "params": {
+        "chunk_size": 1,
+        "normalize_obs": false,
+        "policy_delay": 3,
+        "random_steps": 5000,
+        "batch_size": 256,
+        "utd_ratio": 2.0,
+        "lr_warmup_steps": 0,
+        "lr_decay": "constant",
+        "entropy_scale": -1.0,
+        "entropy_in_target": true,
+        "alpha_granularity": "per_chunk"
+      },
+      "components": {
+        "actor": {
+          "lr": 0.0003,
+          "adam_b1": 0.9,
+          "grad_clip": 1.0,
+          "grad_clip_mode": "element",
+          "latent_dim": 8,
+          "layers": 3,
+          "mlp": {
+            "class_name": "SimBa",
+            "activation": "gelu",
+            "norm": "layer",
+            "dropout": 0.0,
+            "norm_kwargs": {
+              "epsilon": 1e-05
+            },
+            "dtype": "float32",
+            "head_gain": 0.01,
+            "expansion": 4
+          },
+          "squash_cls": "TanhSquash",
+          "log_std_min": -20.0,
+          "log_std_max": 2.0,
+          "class": "StochasticActor"
+        },
+        "critic": {
+          "lr": 0.0003,
+          "adam_b1": 0.5,
+          "grad_clip": 1.0,
+          "grad_clip_mode": "global_norm",
+          "gamma": 0.99,
+          "reward_scale": 1.0,
+          "latent_dim": 8,
+          "layers": 3,
+          "mlp": {
+            "class_name": "MLP",
+            "activation": "gelu",
+            "norm": "layer",
+            "dropout": 0.0,
+            "norm_kwargs": {
+              "epsilon": 1e-05
+            },
+            "dtype": "float32",
+            "head_gain": 0.01,
+            "norm_input": false,
+            "norm_stem": true,
+            "norm_after_act": true,
+            "final_activation": false,
+            "residual": false
+          },
+          "target": {
+            "kind": "polyak",
+            "tau": 0.005,
+            "delay": 1,
+            "joint_forward": false
+          },
+          "ensemble": {
+            "n_models": 2,
+            "value_reduce": "mean",
+            "target_reduce": "mean"
+          },
+          "noise": {
+            "enabled": false,
+            "schedule": {
+              "class_name": "ExponentialSchedule",
+              "start": 0.1,
+              "end": 0.001,
+              "steps": 8,
+              "warmup": 0,
+              "power": 2.0,
+              "s": 0.008
+            },
+            "time": {
+              "class_name": "Fourier",
+              "time_dim": 16,
+              "num_freqs": 16,
+              "freq_min": 0.1,
+              "freq_max": 100.0,
+              "hidden": 32,
+              "concat_input": true,
+              "spacing": "geometric",
+              "learn_freqs": false
+            },
+            "smoothing_coef": 1.0
+          },
+          "weight_norm": false,
+          "flow_steps": 8,
+          "noise_samples": 8,
+          "value_samples": 8,
+          "noise_coverage": 0.1,
+          "noise_limit": 1.0,
+          "train_at_zero_only": false,
+          "distill": true,
+          "num_bins": 51,
+          "sigma": 16.0,
+          "time": {
+            "class_name": "Fourier",
+            "time_dim": 64,
+            "num_freqs": 32,
+            "freq_min": 0.1,
+            "freq_max": 100.0,
+            "hidden": 128,
+            "concat_input": true,
+            "spacing": "geometric",
+            "learn_freqs": false
+          },
+          "reward_offset": 0.01,
+          "v_min": null,
+          "v_max": null,
+          "class": "FloqCritic"
+        },
+        "entropy": {
+          "lr": 0.001,
+          "adam_b1": 0.9,
+          "grad_clip": 1.0,
+          "grad_clip_mode": "global_norm",
+          "alpha_init": 0.0001,
+          "tune": true,
+          "class": "AutotuneRegulator"
+        }
+      }
+    }
+  }
+}

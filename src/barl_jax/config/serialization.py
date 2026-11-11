@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import MISSING, fields, is_dataclass, replace
 from types import UnionType
 from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
 
@@ -69,6 +69,46 @@ def variant_registry():
   return registry, register
 
 
+def _sequence_item_type(expected: Any) -> type | None:
+  """The config dataclass a `tuple[X, ...]` / `list[X]` field holds, if any."""
+  if get_origin(expected) in (list, tuple):
+    args = [a for a in get_args(expected) if a is not Ellipsis]
+    if len(args) == 1:
+      return _dataclass_type(args[0])
+  return None
+
+
+def _with_class_name(values: Mapping[str, Any], path: str) -> Mapping[str, Any]:
+  """Accept the public `class` selector for `class_name` in variant mappings."""
+  if isinstance(values, Mapping) and "class" in values:
+    if "class_name" in values:
+      raise KeyError(f"{path or 'config'}: cannot contain both 'class' and 'class_name'")
+    values = {("class_name" if k == "class" else k): v for k, v in values.items()}
+  return values
+
+
+def _construct_sequence(item_type: type, value: Any, path: str) -> tuple:
+  if not isinstance(value, (list, tuple)):
+    raise TypeError(f"{path} must be a list, got {type(value).__name__}")
+  return tuple(item if isinstance(item, item_type)
+               else construct(item_type, item, path=f"{path}[{i}]")
+               for i, item in enumerate(value))
+
+
+def _default_variant(f, declared: type) -> type:
+  """The class a polymorphic field is built as when its mapping names none: the
+  type of the field's own default (`head` of a `C51CriticConfig` is a C51 head)."""
+  if not hasattr(declared, "variants"):
+    return declared
+  if f.default_factory is not MISSING:
+    default = f.default_factory()
+  elif f.default is not MISSING:
+    default = f.default
+  else:
+    return declared
+  return type(default) if isinstance(default, declared) else declared
+
+
 def _variant(cls: type, name: str, path: str) -> type:
   """The registered subclass of a polymorphic config (`cls.variants`) named `name`."""
   try:
@@ -83,6 +123,8 @@ def construct(cls: type, values: Mapping[str, Any], *, path: str = ""):
   with a `variants` registry is built as the variant its `class_name` names."""
   if not isinstance(values, Mapping):
     raise TypeError(f"{path or 'config'} must be a mapping, got {type(values).__name__}")
+  if hasattr(cls, "variants"):
+    values = _with_class_name(values, path)
   if hasattr(cls, "variants") and "class_name" in values:
     cls = _variant(cls, values["class_name"], path)
   declared = {f.name for f in fields(cls) if f.init}
@@ -99,8 +141,12 @@ def construct(cls: type, values: Mapping[str, Any], *, path: str = ""):
     value = values[f.name]
     expected = hints.get(f.name, f.type)
     nested = _dataclass_type(expected)
+    items = _sequence_item_type(expected)
     if nested is not None:
-      kwargs[f.name] = construct(nested, value, path=key)
+      kwargs[f.name] = value if isinstance(value, nested) else construct(
+        _default_variant(f, nested), value, path=key)
+    elif items is not None:
+      kwargs[f.name] = _construct_sequence(items, value, key)
     elif not is_instance(value, expected):
       raise TypeError(f"{key} has wrong type: expected {type_name(expected)}, "
                       f"got {type(value).__name__} = {value!r}")
@@ -113,6 +159,8 @@ def merge(instance, values: Mapping[str, Any], *, path: str = ""):
   """Strictly apply a nested mapping to an immutable dataclass."""
   if not isinstance(values, Mapping):
     raise TypeError(f"{path or 'config'} must be a mapping, got {type(values).__name__}")
+  if hasattr(instance, "variants"):
+    values = _with_class_name(values, path)
   if hasattr(instance, "variants") and values.get("class_name", instance.class_name) != instance.class_name:
     # Switching variants starts from the new variant's defaults; the old one's
     # fields do not carry over.
@@ -130,8 +178,11 @@ def merge(instance, values: Mapping[str, Any], *, path: str = ""):
     key = f"{path}.{f.name}" if path else f.name
     value = values[f.name]
     current = getattr(instance, f.name)
+    items = _sequence_item_type(hints.get(f.name, f.type))
     if is_dataclass(current) and isinstance(value, Mapping):
       updates[f.name] = merge(current, value, path=key)
+    elif items is not None:
+      updates[f.name] = _construct_sequence(items, value, key)
     elif not is_instance(value, hints.get(f.name, f.type)):
       raise TypeError(f"{key} has wrong type: expected {type_name(hints.get(f.name, f.type))}, "
                       f"got {type(value).__name__} = {value!r}")
@@ -149,6 +200,9 @@ def config_problems(config: Any) -> list[str]:
       value = getattr(config, f.name)
       if is_dataclass(value):
         out += [f"{f.name}.{p}" for p in config_problems(value)]
+      elif isinstance(value, tuple):
+        out += [f"{f.name}[{i}].{p}" for i, item in enumerate(value) if is_dataclass(item)
+                for p in config_problems(item)]
   return out
 
 

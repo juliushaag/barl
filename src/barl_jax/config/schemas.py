@@ -40,8 +40,9 @@ def component_to_dict(component: Any) -> dict[str, Any]:
 
 def component_from_dict(values: Mapping[str, Any], *, path: str = "component"):
   """Inverse of `component_to_dict`, built strictly from `values` alone."""
+  from barl_jax.compat import upgrade_component
   from barl_jax.registration import get_component
-  values = _selector_to_class_name(values)
+  values = _selector_to_class_name(upgrade_component(values))
   if "class_name" not in values:
     raise KeyError(f"{path}: names no 'class'")
   return construct(get_component(values["class_name"]).config_type, values, path=path)
@@ -149,8 +150,9 @@ class ModelConfig:
 def _override_component(base: Any, override: Mapping[str, Any], *, path: str) -> Any:
   if not isinstance(override, Mapping):
     raise TypeError(f"{path} must be a mapping")
+  from barl_jax.compat import upgrade_component
   from barl_jax.registration import get_component
-  raw = _selector_to_class_name(override)
+  raw = _selector_to_class_name(upgrade_component(override, base.class_name))
   selected = raw.pop("class_name", base.class_name)
   if selected != base.class_name:
     base = get_component(selected).config_type()
