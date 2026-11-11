@@ -63,8 +63,9 @@ def test_c51_resolves_a_realistic_dm_control_value_gap(q_gap):
     env_stats = make_env_stats(return_min=stats["return_min"], return_max=stats["return_max"])
     c = build("C51Critic", env_stats=env_stats)
 
-    n = c.config.num_bins
-    bin_width = (c.v_max - c.v_min) / (n - 1)
+    n = c.head.config.num_bins
+    lo, hi = map(float, c.head.support.bounds())
+    bin_width = (hi - lo) / (n - 1)
     boot = jnp.zeros((1, n)).at[0, n // 2].set(1.0)
     terminal = lambda q: c.bellman_target(jnp.array([q]), jnp.ones((1,)), jnp.ones((1,)), boot)
 

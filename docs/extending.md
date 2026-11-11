@@ -3,9 +3,9 @@
 - `components.py` defines actors, critics, configuration declarations and NNX
   state utilities. Low-level components do not import the policy runtime.
 - `policies/` composes components and defines algorithm behavior. Critic losses
-  live in `critics/`: `QCritic` owns TD, the target net, ensemble reduction and
-  noise-conditioned TD; each value head (`DirectCritic`, `HLGaussCritic`,
-  `C51Critic`) supplies only its representation-specific target and regression.
+  live in `critics/`: `QCritic` owns the network and the TD step and is composed
+  of parts -- a value head (`Scalar`, `C51`, `HLGauss`) with its support, a
+  bootstrap target and a training objective (see [components.md](components.md)).
   `SLOT_OBJECTIVES` validates compatibility before construction.
 - `optimization.py` assembles parameter ownership, update cadence and schedules.
 - `collection.py` owns environment/chunk state and emits transitions into an

@@ -6,7 +6,7 @@ axes:
   model.components.critic:
     - label: default
     - label: xqc
-      weight_norm: true
+      constraints: [{class: WeightNorm}]
     - label: simba
       latent_dim: 256
       layers: 3
@@ -17,4 +17,4 @@ axes:
       layers: 3 
       mlp: {class_name: SimBa, activation: gelu, norm: batch, norm_kwargs: {epsilon: 1.0e-5},
             dtype: float16, dropout: 0.0, expansion: 4}
-      weight_norm: true
+      constraints: [{class: WeightNorm}]

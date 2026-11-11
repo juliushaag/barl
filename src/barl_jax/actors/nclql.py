@@ -69,7 +69,7 @@ class LangevinActor(ActionSampler):
     if critic is None:
       raise ValueError("LangevinActor requires a noise-conditioned critic")
     key = self.next_key(key)
-    sigmas = critic.noise.sigmas[...]
+    sigmas = critic.objective.sigmas[...]
     num_levels = int(sigmas.size)
     key, init_key = jax.random.split(key)
     a = self.config.init_scale * (2.0 * jax.random.uniform(

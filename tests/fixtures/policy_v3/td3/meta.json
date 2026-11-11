@@ -1,0 +1,130 @@
+{
+  "format_version": 3,
+  "model": "TD3",
+  "policy_class": "TD3",
+  "policy_type": "barl_jax.actors.td3:TD3",
+  "spec": {
+    "schema_version": 1,
+    "name": "TD3",
+    "model": {
+      "policy": "TD3",
+      "params": {
+        "chunk_size": 1,
+        "normalize_obs": false,
+        "policy_delay": 3,
+        "random_steps": 5000,
+        "batch_size": 256,
+        "utd_ratio": 2.0,
+        "lr_warmup_steps": 0,
+        "lr_decay": "constant"
+      },
+      "components": {
+        "actor": {
+          "lr": 0.0003,
+          "adam_b1": 0.9,
+          "grad_clip": 1.0,
+          "grad_clip_mode": "element",
+          "latent_dim": 8,
+          "layers": 3,
+          "mlp": {
+            "class_name": "SimBa",
+            "activation": "gelu",
+            "norm": "layer",
+            "dropout": 0.0,
+            "norm_kwargs": {
+              "epsilon": 1e-05
+            },
+            "dtype": "float32",
+            "head_gain": 0.01,
+            "expansion": 4
+          },
+          "explore_noise": 0.1,
+          "target_noise": 0.2,
+          "target_noise_clip": 0.5,
+          "class": "DeterministicActor"
+        },
+        "critic": {
+          "lr": 0.0003,
+          "adam_b1": 0.5,
+          "grad_clip": 1.0,
+          "grad_clip_mode": "global_norm",
+          "gamma": 0.99,
+          "reward_scale": 1.0,
+          "latent_dim": 8,
+          "layers": 2,
+          "mlp": {
+            "class_name": "MLP",
+            "activation": "relu",
+            "norm": "batchrenorm",
+            "dropout": 0.0,
+            "norm_kwargs": {
+              "momentum": 0.99,
+              "warmup_steps": 100000,
+              "epsilon": 0.001,
+              "r_max": 3.0,
+              "d_max": 5.0
+            },
+            "dtype": "float32",
+            "head_gain": 0.01,
+            "norm_input": true,
+            "norm_stem": true,
+            "norm_after_act": true,
+            "final_activation": false,
+            "residual": false
+          },
+          "target": {
+            "kind": "none",
+            "tau": 0.005,
+            "delay": 1,
+            "joint_forward": true
+          },
+          "ensemble": {
+            "n_models": 2,
+            "value_reduce": "mean",
+            "target_reduce": "mean"
+          },
+          "noise": {
+            "enabled": false,
+            "schedule": {
+              "class_name": "ExponentialSchedule",
+              "start": 0.1,
+              "end": 0.001,
+              "steps": 8,
+              "warmup": 0,
+              "power": 2.0,
+              "s": 0.008
+            },
+            "time": {
+              "class_name": "Fourier",
+              "time_dim": 16,
+              "num_freqs": 16,
+              "freq_min": 0.1,
+              "freq_max": 100.0,
+              "hidden": 32,
+              "concat_input": true,
+              "spacing": "geometric",
+              "learn_freqs": false
+            },
+            "smoothing_coef": 1.0
+          },
+          "weight_norm": false,
+          "num_bins": 11,
+          "v_min": null,
+          "v_max": null,
+          "entropy_coef": 0.005,
+          "sigma_to_bin_ratio": 0.75,
+          "learn_support": true,
+          "support_init_min": -10.0,
+          "support_init_max": 10.0,
+          "support_alpha": 0.3,
+          "support_eps": 0.005,
+          "support_sigma_min": 0.3,
+          "support_lr": 0.003,
+          "dual_lr": 0.001,
+          "dual_init": 1.0,
+          "class": "C51Critic"
+        }
+      }
+    }
+  }
+}

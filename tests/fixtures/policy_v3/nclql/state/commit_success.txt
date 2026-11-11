@@ -1,0 +1,1 @@
+Checkpoint commit was successful to /home/user/barl/tests/fixtures/policy_v3/.nclql-ly0t6d7m/state

@@ -199,8 +199,7 @@ def _build_policies(run, resume_meta) -> list[Policy]:
       policy.train_steps[...] = jnp.zeros_like(policy.train_steps[...])
       policy.rngs = nnx.Rngs(run.base_seed + i)
       for component in policy.components.values():
-        if hasattr(component, "target_steps"):
-          component.target_steps[...] = jnp.zeros_like(component.target_steps[...])
+        component.reset_counters()
   if policies[0].model_name != run.model_name:
     raise ValueError(f"Checkpoint model {policies[0].model_name!r} differs from {run.model_name!r}")
   return policies

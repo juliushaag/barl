@@ -4,4 +4,4 @@ axes:
 
   model.components.critic:
     - label: xqc
-      weight_norm: true
+      constraints: [{class: WeightNorm}]

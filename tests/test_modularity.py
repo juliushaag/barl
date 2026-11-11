@@ -124,7 +124,7 @@ def test_incompatible_objective_is_rejected_before_building():
   with pytest.raises(ValueError, match="does not support"):
     _RunConfig.from_dict({
       "model": "SAC", "env": "HalfCheetah",
-      "model_overrides": {"components": {"critic": {"noise": {"enabled": True}}}},
+      "model_overrides": {"components": {"critic": {"objective": {"class": "NoiseConditionedTD"}}}},
     })
 
 
