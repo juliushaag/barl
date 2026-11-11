@@ -26,13 +26,20 @@ class CategoricalCriticConfig(QCriticConfig):
   is scaled by 1 / `support_alpha`, as in the paper, and sigma -- the width of the
   Gaussian the leak is measured under, `sigma_to_bin_ratio` bin widths -- is
   floored at `support_sigma_min` so shrinking it cannot fake coverage. HL-Gauss
-  smooths its target with that same sigma; C51 uses it only for the leak."""
+  smooths its target with that same sigma; C51 uses it only for the leak.
+
+  `support_from_random` starts the learned range from a random-actor probe
+  (the trainer's `support_probe_episodes`, in EnvStats) instead: `v_min` at the
+  random actor's discounted value, `r_mean * (1 - gamma^L) / (1 - gamma)` over
+  its mean episode length L, and `v_max` at the configured / env return bound.
+  Without the probe it falls back to `support_init_*`."""
   num_bins: int = 100
   v_min: float | None = None
   v_max: float | None = None
   entropy_coef: float = 0.005
   sigma_to_bin_ratio: float = 0.75
   learn_support: bool = True
+  support_from_random: bool = True
   support_init_min: float = -10.0
   support_init_max: float = 10.0
   support_alpha: float = 0.3
@@ -106,17 +113,23 @@ def to_histogram(value, edges, sigma):
 
 
 class LearnedSupport(nnx.Module):
-  """The two trained value-range endpoints. Sorted on read, and kept a minimum
-  width apart, so the interval is valid whatever the optimizer does to them."""
+  """The trained value range as its upper end and its width, so it is ordered by
+  construction. `project` keeps the width at least `MIN_WIDTH` after every step
+  -- a projection rather than a clamp in `bounds`, which would zero the width's
+  gradient and strand a collapsed support."""
 
-  MIN_WIDTH = 1.0e-2
+  MIN_WIDTH = 1.0
 
   def __init__(self, v_min: float, v_max: float):
-    self.endpoints = nnx.Param(jnp.asarray([v_min, v_max], jnp.float32))
+    self.vmax = nnx.Param(jnp.asarray(v_max, jnp.float32))
+    self.width = nnx.Param(jnp.asarray(max(v_max - v_min, self.MIN_WIDTH), jnp.float32))
 
   def bounds(self):
-    lo, hi = jnp.sort(self.endpoints[...])
-    return lo, jnp.maximum(hi, lo + self.MIN_WIDTH)
+    vmax = self.vmax[...]
+    return vmax - self.width[...], vmax
+
+  def project(self):
+    self.width[...] = jnp.maximum(self.width[...], self.MIN_WIDTH)
 
 
 class CategoricalCritic(QCritic):
@@ -127,7 +140,7 @@ class CategoricalCritic(QCritic):
   def __init__(self, env_stats, config, **kwargs):
     super().__init__(env_stats, config, **kwargs)
     if config.learn_support:
-      self.v_min, self.v_max = float(config.support_init_min), float(config.support_init_max)
+      self.v_min, self.v_max = self._initial_support(env_stats, config)
       self.support_net = LearnedSupport(self.v_min, self.v_max)
       self.dual = nnx.Param(jnp.asarray(config.dual_init, jnp.float32))
     else:
@@ -136,6 +149,17 @@ class CategoricalCritic(QCritic):
       self.support = Buffer(centers)
       self.edges = None if edges is None else Buffer(edges)
       self.sigma = float(sigma) if self.reports_sigma else None
+
+  @staticmethod
+  def _initial_support(env_stats, config) -> tuple[float, float]:
+    """Where a learned support starts; see `support_from_random`."""
+    lo, hi = float(config.support_init_min), float(config.support_init_max)
+    reward, length = env_stats.get("random_reward_mean"), env_stats.get("random_episode_length")
+    if not config.support_from_random or reward is None or length is None:
+      return lo, hi
+    lo = reward * config.reward_scale * (1 - config.gamma ** length) / (1 - config.gamma)
+    hi = value_range(env_stats, config, fallback=(lo, hi))[1]
+    return lo, max(hi, lo + LearnedSupport.MIN_WIDTH)
 
   @classmethod
   def out_dim(cls, config) -> int:
@@ -240,6 +264,7 @@ class CategoricalCritic(QCritic):
     super().after_step()
     if self.config.learn_support:
       self.dual[...] = jnp.maximum(self.dual[...], 0.0)
+      self.support_net.project()
 
   def probs(self, raw):
     return jax.nn.softmax(raw.astype(jnp.float32), axis=-1)

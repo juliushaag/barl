@@ -76,7 +76,9 @@ def run_config(tmp_path) -> RunConfig:
     "model": "SAC", "env": "HalfCheetah",
     "num_seeds": 1, "total_env_steps": 16, "num_envs": 1, "rollout_steps": 1,
     "buffer_size": 16, "eval_video_every": None,
-    "run_dir": str(tmp_path), "compile_cache_dir": str(tmp_path / "cache"),
+    # No cache dir of its own: the setting is process-global, and conftest's
+    # shared cache is what keeps the rest of the worker's tests from recompiling.
+    "run_dir": str(tmp_path), "compile_cache_dir": None, "support_probe_episodes": 0,
     "model_overrides": {"params": {"batch_size": 4, "random_steps": 0}, "components": {
       "actor": {"latent_dim": 8},
       "critic": {"latent_dim": 8},

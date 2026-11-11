@@ -32,6 +32,25 @@ class EnvStats(dict):
     return stats
 
 
+def random_rollout_stats(env: gym.Env, episodes: int, seed: int = 0) -> dict:
+  """`episodes` episodes under a uniformly random actor: the mean per-step reward
+  and the mean episode length, which a learned categorical support starts its
+  lower end from (see `CategoricalCriticConfig.support_from_random`). Plain
+  floats, so they log with the rest of EnvStats."""
+  env.action_space.seed(seed)
+  rewards, lengths = [], []
+  for episode in range(episodes):
+    env.reset(seed=seed + episode)
+    steps, done = 0, False
+    while not done:
+      _, reward, terminated, truncated, _ = env.step(env.action_space.sample())
+      rewards.append(float(reward))
+      steps += 1
+      done = terminated or truncated
+    lengths.append(steps)
+  return {"random_reward_mean": float(np.mean(rewards)),
+          "random_episode_length": float(np.mean(lengths))}
+
 
 class Environment(ABC):
 

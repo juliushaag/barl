@@ -30,7 +30,7 @@ from barl_jax.collection import Collector
 from barl_jax.components import TRAINABLE
 from barl_jax.config.run import RunConfig, validate_run
 from barl_jax.config.serialization import flatten
-from barl_jax.env import Environment
+from barl_jax.env import Environment, random_rollout_stats
 from barl_jax.evaluation import run_episodes
 from barl_jax.executors import executor_from_config
 from barl_jax.metrics import DEBUG, PRIMARY, to_host
@@ -173,6 +173,11 @@ def _build_environments(run, validate_only: bool) -> None:
   run.environment = Environment.make(run.env_name)
   run.env = run.own(run.environment.get_env())       # single env: spaces and EnvStats
   run.env_stats = run.environment.get_env_stats(run.env)
+  # Only a fresh model reads these (a learned critic support's start); a loaded
+  # one keeps its trained parameters, and validation stays cheap.
+  if cfg.support_probe_episodes and not validate_only and cfg.checkpoint is None:
+    run.env_stats.update(random_rollout_stats(run.env, cfg.support_probe_episodes,
+                                              seed=run.base_seed))
 
   run.num_envs = 1 if validate_only else run.num_envs
   run.rollout_env = run.own(run.environment.get_vector_env(run.num_seeds * run.num_envs))

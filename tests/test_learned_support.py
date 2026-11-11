@@ -12,6 +12,7 @@ from flax import nnx
 
 from barl_jax.components import TRAINABLE
 from barl_jax.config.run import RunConfig
+from barl_jax.env import random_rollout_stats
 from barl_jax.optimization import train_step
 from barl_jax.policy import Policy
 
@@ -30,6 +31,11 @@ def boot(critic, batch=1, atom=None):
   k = critic.config.num_bins
   probs = jnp.full((batch, k), 1.0 / k)
   return probs if atom is None else jnp.zeros((batch, k)).at[:, atom].set(1.0)
+
+
+def set_bounds(critic, lo, hi):
+  critic.support_net.vmax[...] = jnp.asarray(hi, jnp.float32)
+  critic.support_net.width[...] = jnp.asarray(hi - lo, jnp.float32)
 
 
 def gauss_leak(y, sigma, lo, hi):
@@ -54,7 +60,7 @@ def test_learned_support_is_the_default(head):
 def test_learned_support_adds_its_own_optimizer_keys_and_parameters(head):
   critic = learned(head)
   assert set(critic.create_optimizer()) == {"critic", "support", "support_dual"}
-  assert critic.param_labels(("support_net", "endpoints")) == "support"
+  assert critic.param_labels(("support_net", "width")) == "support"
   assert critic.param_labels(("dual",)) == "support_dual"
   assert critic.param_labels(("net", "ensemble")) is None
   np.testing.assert_allclose(critic.support_net.bounds(), (-10.0, 10.0))
@@ -62,7 +68,7 @@ def test_learned_support_adds_its_own_optimizer_keys_and_parameters(head):
 
 def test_hlgauss_geometry_follows_the_endpoints():
   critic = learned("HLGaussCritic", num_bins=10)
-  critic.support_net.endpoints[...] = jnp.asarray([4.0, -6.0])    # unsorted on purpose
+  set_bounds(critic, -6.0, 4.0)
   edges, _, sigma = critic._geometry(*critic.support_net.bounds())
   np.testing.assert_allclose(edges, np.linspace(-6, 4, 11), atol=1e-5)
   np.testing.assert_allclose(critic.support_values(), np.linspace(-5.5, 3.5, 10), atol=1e-5)
@@ -71,7 +77,7 @@ def test_hlgauss_geometry_follows_the_endpoints():
 
 def test_c51_atoms_span_the_endpoints_inclusive():
   critic = learned("C51Critic", num_bins=11)
-  critic.support_net.endpoints[...] = jnp.asarray([4.0, -6.0])
+  set_bounds(critic, -6.0, 4.0)
   edges, _, sigma = critic._geometry(*critic.support_net.bounds())
   assert edges is None
   np.testing.assert_allclose(critic.support_values(), np.linspace(-6, 4, 11), atol=1e-5)
@@ -113,7 +119,7 @@ def test_c51_leak_is_a_mixture_over_the_shifted_atoms():
 
 def test_c51_projection_follows_the_moved_atoms():
   critic = learned("C51Critic", num_bins=21)
-  critic.support_net.endpoints[...] = jnp.asarray([-2.0, 6.0])
+  set_bounds(critic, -2.0, 6.0)
   atoms = np.asarray(critic.support_values())
   j = 14
   probs = jnp.zeros((1, atoms.size)).at[0, j].set(1.0)
@@ -121,6 +127,15 @@ def test_c51_projection_follows_the_moved_atoms():
   assert float(target.sum()) == pytest.approx(1.0, abs=1e-5)
   mean = float((target * critic.support_values()).sum())
   assert mean == pytest.approx(0.1 + critic.config.gamma * atoms[j], abs=1e-4)
+
+
+@pytest.mark.parametrize("head", HEADS)
+def test_width_is_projected_back_to_the_minimum_after_a_step(head):
+  critic = learned(head)
+  set_bounds(critic, 1.0, 1.0 - 1.0)        # an optimizer step drove the width negative
+  critic.after_step()
+  lo, hi = critic.support_net.bounds()
+  assert float(hi - lo) == pytest.approx(critic.support_net.MIN_WIDTH)
 
 
 def grads_for(critic, y):
@@ -135,8 +150,7 @@ def grads_for(critic, y):
 def test_violated_constraint_widens_the_support_and_raises_the_multiplier(head):
   critic = learned(head)
   grads = grads_for(critic, y=10.3)         # one sigma beyond v_max = 10: mass leaks
-  lo_grad, hi_grad = np.asarray(grads.support_net.endpoints[...])
-  assert hi_grad < 0                        # descending the loss raises v_max
+  assert float(grads.support_net.vmax[...]) < 0   # descending the loss raises v_max
   assert float(grads.dual[...]) < 0         # descending the *negated* term raises lambda
 
 
@@ -144,8 +158,7 @@ def test_violated_constraint_widens_the_support_and_raises_the_multiplier(head):
 def test_slack_constraint_shrinks_the_support_and_lowers_the_multiplier(head):
   critic = learned(head)
   grads = grads_for(critic, y=0.0)          # nothing leaks, leak < eps
-  lo_grad, hi_grad = np.asarray(grads.support_net.endpoints[...])
-  assert hi_grad > 0 and lo_grad < 0        # the width penalty pulls both inward
+  assert float(grads.support_net.width[...]) > 0  # the width penalty narrows the range
   assert float(grads.dual[...]) > 0
 
 
@@ -159,7 +172,8 @@ def test_cross_entropy_does_not_move_the_support_or_multiplier(head):
                                    boot(critic, BATCH))
     return critic.regression_loss(raw, target)
   grads = nnx.grad(ce)(critic)
-  assert not np.any(np.asarray(grads.support_net.endpoints[...]))
+  assert float(grads.support_net.vmax[...]) == 0
+  assert float(grads.support_net.width[...]) == 0
   assert float(grads.dual[...]) == 0
 
 
@@ -202,7 +216,8 @@ def test_policy_routes_each_parameter_group_to_its_own_optimizer(head):
   policy = sac_policy(head)
   labels = {".".join(map(str, path)): key
             for path, key in nnx.to_flat_state(policy.optimizer_labels())}
-  assert labels["critic.support_net.endpoints"] == "support"
+  assert labels["critic.support_net.vmax"] == "support"
+  assert labels["critic.support_net.width"] == "support"
   assert labels["critic.dual"] == "support_dual"
   assert {k for k in labels.values()} >= {"critic", "support", "support_dual", "actor"}
 
@@ -220,3 +235,43 @@ def test_training_expands_the_support_towards_returns_it_cannot_cover(head):
   lo, hi = trained.critic.support_net.bounds()
   assert float(hi) > 10.0 and finite(jnp.stack([lo, hi]))
   assert float(trained.critic.dual[...]) >= 0.0
+
+
+# ---- starting the support from a random-actor probe -------------------------------
+
+
+def test_random_rollout_stats_average_reward_and_length():
+  env = gym.wrappers.TimeLimit(gym.make("Pendulum-v1").unwrapped, max_episode_steps=7)
+  stats = random_rollout_stats(env, episodes=3, seed=0)
+  assert stats["random_episode_length"] == 7.0
+  assert -16.3 <= stats["random_reward_mean"] <= 0.0       # Pendulum's reward range
+
+
+@pytest.mark.parametrize("head", HEADS)
+def test_support_starts_at_the_random_actors_discounted_value(head):
+  stats = make_env_stats(random_reward_mean=-2.0, random_episode_length=50.0)
+  critic = build(head, learn_support=True, env_stats=stats)
+  gamma, scale = critic.config.gamma, critic.config.reward_scale
+  lo, hi = critic.support_net.bounds()
+  assert float(lo) == pytest.approx(-2.0 * scale * (1 - gamma ** 50) / (1 - gamma), rel=1e-5)
+  assert float(hi) == pytest.approx(stats["return_max"] * scale, rel=1e-5)
+
+
+@pytest.mark.parametrize("head", HEADS)
+def test_support_keeps_its_minimum_width_above_a_random_value_past_the_bound(head):
+  stats = make_env_stats(random_reward_mean=1.0e3, random_episode_length=50.0)
+  critic = build(head, learn_support=True, env_stats=stats)
+  lo, hi = critic.support_net.bounds()
+  assert float(hi - lo) == pytest.approx(critic.support_net.MIN_WIDTH, rel=1e-4)
+
+
+@pytest.mark.parametrize("head", HEADS)
+@pytest.mark.parametrize("probe", [False, True])
+def test_support_falls_back_to_the_configured_start(head, probe):
+  """Without a probe, or with `support_from_random` off, `support_init_*` holds."""
+  stats = make_env_stats(**({"random_reward_mean": -2.0, "random_episode_length": 50.0}
+                            if probe else {}))
+  critic = build(head, learn_support=True, support_from_random=not probe, env_stats=stats)
+  cfg = critic.config
+  np.testing.assert_allclose(critic.support_net.bounds(),
+                             (cfg.support_init_min, cfg.support_init_max))

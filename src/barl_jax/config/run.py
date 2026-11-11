@@ -24,7 +24,7 @@ from barl_jax.registration import available_executors, get_component, get_execut
 _NESTED = ("model_config", "collection_executor", "eval_executor")
 _INT_POSITIVE = ("total_env_steps", "rollout_steps", "num_envs", "buffer_size",
                  "eval_every", "eval_runs", "log_every", "debug_every", "resume_keep")
-_INT_NONNEGATIVE = ("wandb_finish_timeout",)
+_INT_NONNEGATIVE = ("wandb_finish_timeout", "support_probe_episodes")
 _INT_POSITIVE_OR_NULL = ("eval_video_every", "resume_every")
 
 
@@ -55,6 +55,9 @@ class RunConfig:
   buffer_size: int = 1_000_000
   eval_every: int = 25_000
   eval_runs: int = 10
+  # Random-actor episodes run before training to start a learned categorical
+  # support from (see random_rollout_stats); 0 skips them.
+  support_probe_episodes: int = 5
   eval_video_every: int | None = 4
   log_every: int = 1000
   debug_every: int = 10000
