@@ -1,5 +1,6 @@
 # Imported for @register_component side effects and as the public critic surface.
 from barl_jax.critics.base import (
+  CQLConfig,
   EnsembleConfig,
   NoiseConditioningConfig,
   QCritic,
@@ -32,6 +33,7 @@ from barl_jax.critics.noise import NoiseConditioning
 __all__ = [
   "C51Critic",
   "C51CriticConfig",
+  "CQLConfig",
   "CategoricalCritic",
   "CategoricalCriticConfig",
   "DirectCritic",

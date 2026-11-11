@@ -156,6 +156,8 @@ class FloqCritic(ScalarValue, QCritic):
     problems = super().config_problems(config)
     if config.noise.enabled:
       problems.append("noise conditioning is not supported")
+    if config.cql.enabled:
+      problems.append("cql is not supported")
     if config.weight_norm:
       problems.append("weight_norm is not supported")
     if config.flow_steps < 1:

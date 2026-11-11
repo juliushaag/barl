@@ -8,6 +8,7 @@ and works for every head:
   mlp.norm              none | layer | batchrenorm | batch
   ensemble.*_reduce     mean | min over the n_models members
   noise.enabled         noise-conditioned TD (NCLQL) on top of plain TD
+  cql.enabled           CQL(H) conservative penalty on the expected value, on top of TD
   weight_norm           XQC's unit-norm weight projection after every step
 """
 
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import nnx
 
 from barl_jax.components import TARGET_SUFFIX, Buffer, Critic, frozen
@@ -68,6 +70,19 @@ class NoiseConditioningConfig:
 
 
 @dataclass(frozen=True)
+class CQLConfig:
+  """CQL(H) (Kumar et al., arXiv:2006.04779) as an online regularizer: per member,
+  `alpha * (T * logsumexp_a(Q(s, a) / T) - Q(s, a_data))` over `n_actions` uniform,
+  `n_actions` current-state and `n_actions` next-state policy actions, importance
+  weighted by their densities. Q is the head's expected value, so it applies to every
+  head; the penalty is averaged over members and batch."""
+  enabled: bool = False
+  alpha: float = 1.0
+  n_actions: int = 10
+  temperature: float = 1.0
+
+
+@dataclass(frozen=True)
 class QCriticConfig(CriticOptimConfig):
   gamma: float = 0.99
   reward_scale: float = 1.0
@@ -77,6 +92,7 @@ class QCriticConfig(CriticOptimConfig):
   target: TargetConfig = field(default_factory=TargetConfig)
   ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
   noise: NoiseConditioningConfig = field(default_factory=NoiseConditioningConfig)
+  cql: CQLConfig = field(default_factory=CQLConfig)
   weight_norm: bool = False
 
 
@@ -151,6 +167,10 @@ class QCritic(Critic):
       raise ValueError(f"{type(self).__name__}: " + "; ".join(problems))
 
     self.noise = NoiseConditioning(env_stats, config.noise) if config.noise.enabled else None
+    low, high = env_stats.get("act_low"), env_stats.get("act_high")
+    ones = np.ones(env_stats["act_dim"], np.float32)
+    self.act_bounds = Buffer(jnp.asarray(np.stack([-ones if low is None else low,
+                                                   ones if high is None else high]), jnp.float32))
     self.net = self.build_network(env_stats, config, rngs=rngs)
     if config.weight_norm:
       normalize_weights(self.net.ensemble.members)
@@ -166,6 +186,16 @@ class QCritic(Critic):
     for name in ("value_reduce", "target_reduce"):
       if getattr(config.ensemble, name) not in REDUCTIONS:
         problems.append(f"ensemble.{name}={getattr(config.ensemble, name)!r} not in {REDUCTIONS}")
+    if config.cql.enabled:
+      if config.cql.n_actions < 1:
+        problems.append(f"cql.n_actions={config.cql.n_actions!r}: must be >= 1")
+      if not config.cql.temperature > 0:
+        problems.append(f"cql.temperature={config.cql.temperature!r}: must be > 0")
+      if config.mlp.norm in BATCH_STAT_NORMS:
+        problems.append(f"cql.enabled with mlp.norm={config.mlp.norm!r}: the extra action "
+                        "forward would pollute the batch statistics")
+      if config.noise.enabled:
+        problems.append("cql.enabled and noise.enabled are not combined")
     if config.mlp.norm in BATCH_STAT_NORMS and not config.target.joint_forward:
       problems.append(f"mlp.norm={config.mlp.norm!r} needs target.joint_forward: batch statistics "
                       "must be shared between the (s,a) and (s',a') halves")
@@ -182,6 +212,10 @@ class QCritic(Critic):
   @property
   def has_target(self) -> bool:
     return self.config.target.kind == "polyak"
+
+  @property
+  def uses_cql(self) -> bool:
+    return self.config.cql.enabled
 
   @property
   def n_models(self) -> int:
@@ -264,12 +298,42 @@ class QCritic(Critic):
     support), keyed by their own optimizer key. Empty unless the head has some."""
     return {}
 
+  def cql_penalty(self, obs, next_obs, data_expectation, samples, key):
+    """The CQL(H) penalty. `data_expectation`: (N, B, 1) member expectations at the
+    dataset actions; `samples`: `(curr, curr_logp, next, next_logp)` policy actions
+    (n, B, A) and their log-densities (n, B), from `RLPolicy.cql_samples`."""
+    cfg = self.config.cql
+    curr, curr_logp, nxt, nxt_logp = samples
+    n, b = curr.shape[:2]
+    low, high = self.act_bounds[...]
+    rand = jax.random.uniform(key, curr.shape, jnp.float32, low, high)
+    rand_logp = jnp.full((n, b), -jnp.log(high - low).sum())
+
+    states = jnp.concatenate([jnp.broadcast_to(obs, (n,) + obs.shape)] * 2
+                             + [jnp.broadcast_to(next_obs, (n,) + next_obs.shape)])
+    actions = jnp.concatenate([rand, curr, nxt])
+    logp = jnp.concatenate([rand_logp, curr_logp, nxt_logp])
+    flat = lambda x: x.reshape((3 * n * b,) + x.shape[2:])
+    q = self.expectation_members(self.raw(flat(states), flat(actions)))
+    q = q.reshape(q.shape[0], 3 * n, b)
+
+    t = cfg.temperature
+    lse = t * jax.nn.logsumexp((q - logp[None]) / t, axis=1)
+    gap = lse - data_expectation[..., 0]
+    self.metrics.scalar("cql_gap", gap.mean())
+    self.metrics.scalar("cql_q_sampled", q.mean())
+    return cfg.alpha * gap.mean()
+
   def td_loss(self, obs, action, next_obs, next_action, chunk_return, terminated, horizon,
-              entropy_bonus=0.0, *, key=None) -> dict:
+              entropy_bonus=0.0, *, key=None, cql_samples=None) -> dict:
     """chunk_return: (B,) return already discounted within the executed
     horizon; terminated: (B,) true termination (never truncation); horizon:
     (B,) env steps the return spans; entropy_bonus: (B, 1) or 0.0, added to the
     bootstrap before discounting."""
+    if self.uses_cql:
+      if key is None or cql_samples is None:
+        raise ValueError("CQL requires an explicit random key and cql_samples")
+      key, cql_key = jax.random.split(key)
     items = [(obs, action, self._level(obs, None))]
     if self.noise is not None:
       if key is None:
@@ -282,6 +346,12 @@ class QCritic(Critic):
     target = self.bellman_target(chunk_return, terminated, horizon, bootstrap, entropy_bonus)
     loss = self.regression_loss(preds[0], target)
     self.record(preds[0], target)
+
+    if self.uses_cql:
+      penalty = self.cql_penalty(obs, next_obs, self.expectation_members(preds[0]),
+                                 cql_samples, cql_key)
+      self.metrics.scalar("cql_penalty", penalty)
+      loss = loss + penalty
 
     if self.noise is not None:
       smoothing = self.regression_loss(preds[1], jax.lax.stop_gradient(self.soft_target(preds[0])))

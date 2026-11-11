@@ -145,9 +145,12 @@ class RLPolicy(Policy):
     next_action, entropy = jax.lax.stop_gradient(
       self.actor.generate_action(next_obs, critic=self.critic, key=keys[0]))
 
+    extra = {}
+    if self.critic.uses_cql:
+      extra["cql_samples"] = self.cql_samples(obs, next_obs, self.rngs.noise())
     losses.update(self.critic.td_loss(
       obs, action, next_obs, next_action, chunk_return, terminated, horizon,
-      entropy_bonus=self.target_entropy_bonus(alpha, entropy), key=keys[-1]))
+      entropy_bonus=self.target_entropy_bonus(alpha, entropy), key=keys[-1], **extra))
 
     # An actor can own multiple optimizers. Compute their shared loss whenever any partition is due; mask each
     # optimizer independently according to optimizer_cadence().
@@ -163,6 +166,21 @@ class RLPolicy(Policy):
       self.actor.metrics.dist("entropy", entropy)
 
     return losses
+
+  def cql_samples(self, obs, next_obs, key):
+    """`(curr, curr_logp, next, next_logp)`: `cql.n_actions` policy actions (n, B, A)
+    and their log-densities (n, B) at `obs` and `next_obs`, for the CQL penalty."""
+    n, b = self.critic.config.cql.n_actions, obs.shape[0]
+
+    def draw(states, key):
+      repeated = jnp.broadcast_to(states, (n,) + states.shape).reshape(n * b, -1)
+      action, entropy = self.actor.generate_action(repeated, critic=self.critic, key=key)
+      if entropy is None:
+        raise ValueError("CQL needs an actor that reports its sample entropy")
+      return jax.lax.stop_gradient((action.reshape(n, b, -1), -entropy.reshape(n, b)))
+
+    curr_key, next_key = jax.random.split(key)
+    return (*draw(obs, curr_key), *draw(next_obs, next_key))
 
   def inference_step(self, observation, step_info=None, key=None):
     obs = self.normalize_observations(observation)

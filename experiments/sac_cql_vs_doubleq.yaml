@@ -1,0 +1,43 @@
+# SAC on DogRun and HumanoidRun: two ways to curb overestimation, (CQL, DoubleQ), crossed
+# with the two categorical heads (C51, HLGauss). 1M steps (the run default), wandb logging,
+# 3 seeds vmapped inside each run. Two runs share a GPU, each capped at 45% of its memory.
+#
+#   XLA_PYTHON_CLIENT_MEM_FRACTION=0.45 uv run python scripts/submit.py \
+#     --grid experiments/sac_cql_vs_doubleq.yaml --seeds 3 --executor tmux \
+#     --max-parallel 2 --sweep-dir sweeps/sac_cql_vs_doubleq
+#
+# Both arms share the critic of `critic_ablation.yaml`'s doubleq arm -- two members, polyak
+# target, relu MLP without normalization (CQL's extra action forward rules out batch
+# statistics) -- so the only difference is how the overestimation is handled:
+#
+#   doubleq  min over the two members, for the value and for the bootstrap
+#   cql      mean over the two members, plus the CQL(H) penalty (alpha 1, 10 uniform + 10
+#            current + 10 next-state policy actions per row) on each member's expected value
+
+axes:
+  algo: [SAC]
+  env: [DogRun, HumanoidRun]
+
+  model.components.critic:
+    - label: cql_c51
+      class: C51Critic
+      target: {kind: polyak, joint_forward: false}
+      mlp: {class_name: MLP, activation: relu, norm: none}
+      ensemble: {n_models: 2, value_reduce: mean, target_reduce: mean}
+      cql: {enabled: true}
+    - label: cql_hlgauss
+      class: HLGaussCritic
+      target: {kind: polyak, joint_forward: false}
+      mlp: {class_name: MLP, activation: relu, norm: none}
+      ensemble: {n_models: 2, value_reduce: mean, target_reduce: mean}
+      cql: {enabled: true}
+    - label: doubleq_c51
+      class: C51Critic
+      target: {kind: polyak, joint_forward: false}
+      mlp: {class_name: MLP, activation: relu, norm: none}
+      ensemble: {n_models: 2, value_reduce: min, target_reduce: min}
+    - label: doubleq_hlgauss
+      class: HLGaussCritic
+      target: {kind: polyak, joint_forward: false}
+      mlp: {class_name: MLP, activation: relu, norm: none}
+      ensemble: {n_models: 2, value_reduce: min, target_reduce: min}
