@@ -1,0 +1,32 @@
+# Critic ablation: plain / double-Q / CrossQ / distributional critics under SAC, AMDP and DIME
+# on DogRun and HumanoidRun, wandb logging. 4 seeds are vmapped inside each run; two runs
+# share a GPU, each capped at 45% of its memory.
+#
+#   XLA_PYTHON_CLIENT_MEM_FRACTION=0.45 uv run python scripts/submit.py \
+#     --grid experiments/critic_ablation.yaml --seeds 4 --executor tmux \
+#     --max-parallel 2 --sweep-dir sweeps/critic_ablation
+#
+#   plain    one scalar Q, polyak target, no normalization
+#   doubleq  two scalar Qs, min-reduced, polyak target, no normalization
+#   crossq   one scalar Q, no target net, post-activation BatchRenorm (the critic default)
+#   c51 / hlgauss  the distributional heads at their defaults
+
+axes:
+  algo: [SAC, AMDP, DIME]
+  env: [DogRun, HumanoidRun]
+
+  model.components.critic:
+    - label: plain
+      class: DirectCritic
+      target: {kind: polyak, joint_forward: false}
+      mlp: {class_name: MLP, activation: relu, norm: none}
+    - label: doubleq
+      class: EnsembleCritic
+      target: {kind: polyak, joint_forward: false}
+      mlp: {class_name: MLP, activation: relu, norm: none}
+    - label: crossq
+      class: DirectCritic
+    - label: c51
+      class: C51Critic
+    - label: hlgauss
+      class: HLGaussCritic

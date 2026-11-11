@@ -1,0 +1,25 @@
+# Test sweep: AMDP and SAC on DogRun and HumanoidRun with the XQC critic recipe
+# (polyak target on the joint batch, pre-activation BatchNorm, weight norm, 512x3,
+# min target reduction, 101 bins) on an HL-Gauss head with the learned (DySEL) support.
+#
+#   uv run python scripts/submit.py --grid experiments/amdp_sac_xqc_hlgauss.yaml --seeds 3 \
+#     --executor tmux --max-parallel 2 --sweep-dir sweeps/amdp_sac_xqc_hlgauss
+
+axes:
+  algo: [AMDP, SAC]
+  env: [DogRun, HumanoidRun]
+
+  model.components.critic:
+    - label: xqc_hlgauss
+      class: HLGaussCritic
+      learn_support: true
+      num_bins: 101
+      entropy_coef: 0.0
+      latent_dim: 512
+      layers: 3
+      adam_b1: 0.9
+      weight_norm: true
+      target: {kind: polyak, joint_forward: true}
+      ensemble: {n_models: 2, value_reduce: mean, target_reduce: mean}
+      mlp: {class_name: MLP, activation: relu, norm: batch, norm_input: true, norm_stem: true,
+            norm_after_act: false, norm_kwargs: {momentum: 0.99, epsilon: 1.0e-3}}

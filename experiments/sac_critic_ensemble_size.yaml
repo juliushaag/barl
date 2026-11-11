@@ -1,0 +1,13 @@
+axes:
+  algo: [SAC]
+  env: [HumanoidRun]
+
+  model.components.critic:
+    - label: n1
+      ensemble: {n_models: 1}
+    - label: n2
+      ensemble: {n_models: 2}
+    - label: n3
+      ensemble: {n_models: 3}
+    - label: n8
+      ensemble: {n_models: 8}
