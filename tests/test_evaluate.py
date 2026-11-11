@@ -26,6 +26,11 @@ class ShortPendulum(Environment):
     return gym.make("Pendulum-v1", max_episode_steps=3)
 
 
+@pytest.fixture(autouse=True)
+def _no_wandb(monkeypatch):
+  monkeypatch.setenv("WANDB_MODE", "disabled")
+
+
 def test_checkpoint_discovery_and_saved_environment(tmp_path):
   run = tmp_path / "arbitrary-run-name"
   best = run / "checkpoints" / "seed7" / "best"
@@ -220,7 +225,7 @@ def test_main_writes_partial_results_when_one_entry_crashes(tmp_path, monkeypatc
 
 def test_main_writes_nan_results_instead_of_losing_the_file(tmp_path, monkeypatch):
   monkeypatch.setattr(module, "evaluate_entry",
-                      lambda entry: {"x": {"DirectExecutor": {"mean_return": float("nan")}}})
+                      lambda entry, logger=None: {"x": {"DirectExecutor": {"mean_return": float("nan")}}})
   cfg = tmp_path / "eval.yaml"
   out = tmp_path / "out.json"
   cfg.write_text("runs:\n  - path: whatever\n")
@@ -229,3 +234,70 @@ def test_main_writes_nan_results_instead_of_losing_the_file(tmp_path, monkeypatc
   # NaN is not valid JSON, but Python's json module writes it as a bare
   # literal rather than the strict write silently losing the whole file.
   assert "NaN" in out.read_text()
+
+
+class _FakeRun:
+  def __init__(self, sink, kwargs):
+    self.sink, self.kwargs, self.rows, self.summary = sink, kwargs, [], {}
+    sink.append(self)
+
+  def define_metric(self, *args, **kwargs):
+    pass
+
+  def log(self, row):
+    self.rows.append(row)
+
+  def finish(self):
+    pass
+
+
+def test_inference_logger_logs_one_run_per_rollout_with_critic_bias(tmp_path, monkeypatch):
+  from barl_jax import inference_logger
+
+  family = ShortPendulum()
+  env = family.get_env()
+  try:
+    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    save_policy(policy, tmp_path / "sweep" / "seed3" / "best")
+  finally:
+    env.close()
+  monkeypatch.setattr(Environment, "make", lambda name: family)
+
+  detail = {}
+  module.evaluate(tmp_path / "sweep" / "seed3" / "best", "short", ["DirectExecutor", "MeanExecutor"],
+                  episodes=2, num_envs=2, num_candidates=2, seed=0, detail=detail)
+  records = detail["records"]
+  assert set(records) == {"DirectExecutor", "MeanExecutor"}
+  for episodes in records.values():
+    for record in episodes:
+      assert len(record["probe"]["q"]) == len(record["rewards"]) > 0
+      assert len(record["probe"]["entropy"]) == len(record["rewards"])
+
+  runs = []
+  fake = type("W", (), {"init": staticmethod(lambda **kw: _FakeRun(runs, kw)),
+                        "Settings": staticmethod(lambda **kw: kw)})
+  monkeypatch.setitem(__import__("sys").modules, "wandb", fake)
+  logger = inference_logger.InferenceLogger(project="p")
+  logger.log_checkpoint(tmp_path / "sweep" / "seed3" / "best", sweep_root=tmp_path / "sweep",
+                        env_name="short", entry={"path": "x"}, records=records,
+                        gamma=detail["gamma"], alpha=detail["alpha"])
+  assert len(runs) == 4
+  run = runs[0]
+  assert run.kwargs["group"] == "sweep/DirectExecutor" and run.kwargs["name"] == "seed3/ep0"
+  assert run.kwargs["config"]["seed"] == 3
+  first = run.rows[0]
+  assert {"t", "reward", "cum_reward", "q", "entropy", "return_to_go", "bias"} <= set(first)
+  assert run.summary["episode_return"] == pytest.approx(run.rows[-1]["cum_reward"])
+  assert run.summary["bias0"] == pytest.approx(first["q"] - first["return_to_go"])
+
+
+def test_return_to_go_is_discounted_suffix_sum():
+  from barl_jax.inference_logger import return_to_go
+  assert return_to_go([1.0, 1.0, 1.0], 0.5).tolist() == [1.75, 1.5, 1.0]
+
+
+def test_soft_return_to_go_discounts_next_state_entropy():
+  from barl_jax.inference_logger import return_to_go
+  # r=[1,1], gamma=.5, alpha*H after each step=[2, 0]:
+  # G_1 = 1 + .5*0 = 1 ; G_0 = (1 + .5*2) + .5*G_1 = 2.5
+  assert return_to_go([1.0, 1.0], 0.5, [2.0, 0.0]).tolist() == [2.5, 1.0]

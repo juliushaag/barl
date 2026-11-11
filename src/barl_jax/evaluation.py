@@ -1,6 +1,7 @@
 """Episode evaluation independent of policy construction and training."""
 import gymnasium as gym
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from barl_jax.collection import act_on, step_env
@@ -33,7 +34,7 @@ def episode_success(info, i: int, is_vec: bool, terminated: bool) -> bool:
 
 
 def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
-                 **inference_kwargs) -> list[dict]:
+                 probe=None, **inference_kwargs) -> list[dict]:
   """`n` complete episodes, in parallel waves of `num_envs` if `env` is a
   VectorEnv. A slot that finishes before the rest of its wave is reset and
   stops recording -- autoreset_mode=DISABLED asserts rather than letting a
@@ -49,7 +50,15 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
   reads it). The caller derives `seed` from something stable (run seed +
   evaluation identity, see `barl_jax.seeding.derive_seed`) so repeated calls
   with the same `seed` see the same episodes; each wave within one call still
-  gets its own derived sub-seed, so wave 2 does not replay wave 1."""
+  gets its own derived sub-seed, so wave 2 does not replay wave 1.
+
+  `probe`, given, is a pure `(observation, action, key) -> {name: (batch,)}`
+  of diagnostics at every stepped (state, executed action) -- the critic's Q,
+  the policy's entropy (see `barl_jax.inference_logger.make_probe_fn`). Each
+  record then carries `probe`, `{name: [value per step]}` aligned with
+  `rewards`. The probe's key is folded off the action key, so probing never
+  changes the action stream. Only supported for actors that act on their live
+  rows alone (not a StackedPolicy)."""
   if n <= 0:
     return []
 
@@ -74,7 +83,7 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
     wave = min(n_envs, n - len(out))
     obs  = reset(wave_index)
     refill_index = 0
-    data = [dict(frames=[], rewards=[], terminated=False, success=False,
+    data = [dict(frames=[], rewards=[], probe={}, terminated=False, success=False,
                  act_nonfinite=0, n_act=0)
             for _ in range(n_envs)]
     live = np.zeros(n_envs, dtype=bool)
@@ -89,6 +98,11 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
       action_np = np.zeros((n_envs, act_dim), np.float32)
       action_np[live] = action_live if rows is not None else action_live[live]
       nonfinite = ~np.isfinite(action_np)
+      probed = None
+      if probe is not None and rows is not None:
+        probed = {name: np.asarray(v).reshape(len(rows), -1)[:, 0] for name, v in probe(
+          jnp.asarray(obs[rows], jnp.float32), jnp.asarray(action_live),
+          jax.random.fold_in(subkey, 1)).items()}
       obs, reward, term, trunc, info = step_env(env, action_np, act_scale_np, act_bias_np,
                                                 is_vec=is_vec)
 
@@ -97,6 +111,9 @@ def run_episodes(actor, env: gym.Env, n: int, render: bool, *, seed: int = 0,
       done = term | trunc
       for i in np.flatnonzero(live):
         data[i]["rewards"].append(reward[i])
+        if probed is not None:
+          for name, values in probed.items():
+            data[i]["probe"].setdefault(name, []).append(float(values[np.searchsorted(rows, i)]))
         data[i]["act_nonfinite"] += int(nonfinite[i].sum())
         data[i]["n_act"] += int(nonfinite[i].size)
         if render:

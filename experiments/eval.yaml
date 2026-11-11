@@ -6,7 +6,7 @@
 # run directory, or a whole sweep (every seed's checkpoint under it, same
 # discovery as the plain `scripts/evaluate.py <path>` CLI). Any key a run
 # entry omits falls back to `defaults:` below, then evaluate.py's own CLI
-# defaults (see --help): checkpoint: best, mode: [DirectExecutor], episodes: 10,
+# defaults (see --help): checkpoint: best, mode: [DirectExecutor], episodes: 5,
 # num_envs: 8, num_candidates: 8, top_k: 2, sigma: 0.1, seed: 0.
 #
 # `env` is optional -- omitted, it is read from the checkpoint's own saved
@@ -20,7 +20,7 @@
 output: results/eval.json
 
 defaults:
-  episodes: 20
+  episodes: 5
   num_candidates: 8
 
 runs:

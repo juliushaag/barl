@@ -132,7 +132,7 @@ def parse_args(argv=None):
                     help="--from-sweep only.")
     ev.add_argument("--mode", nargs="+", choices=EVAL_MODES, default=["DirectExecutor"],
                     help="--from-sweep only. Action executor class name(s), see barl_jax.executors.")
-    ev.add_argument("--episodes", type=int, default=10, help="--from-sweep only.")
+    ev.add_argument("--episodes", type=int, default=5, help="--from-sweep only.")
     ev.add_argument("--num-envs", type=int, default=8, help="--from-sweep only.")
     ev.add_argument("--num-candidates", type=int, default=8, help="--from-sweep only.")
     ev.add_argument("--top-k", type=int, default=2, help="--from-sweep only. Only used by --mode topk")
@@ -153,7 +153,7 @@ def parse_args(argv=None):
     if args.batch_size is not None and not (args.eval_config or args.from_sweep):
         parser.error("--batch-size only applies with --eval-config or --from-sweep")
     if not args.from_sweep and (args.checkpoint != "best" or args.mode != ["DirectExecutor"]
-                                or args.episodes != 10 or args.num_envs != 8
+                                or args.episodes != 5 or args.num_envs != 8
                                 or args.num_candidates != 8 or args.top_k != 2
                                 or args.sigma != 0.1 or args.seed != 0):
         parser.error("--checkpoint/--mode/--episodes/--num-envs/--num-candidates/--top-k/--sigma/"

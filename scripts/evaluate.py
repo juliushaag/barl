@@ -61,7 +61,8 @@ def environment_name(path: Path) -> str | None:
   return None
 
 
-def evaluate(path, env_name, modes, *, episodes, num_envs, num_candidates, seed, top_k=2, sigma=0.1):
+def evaluate(path, env_name, modes, *, episodes, num_envs, num_candidates, seed, top_k=2, sigma=0.1,
+             detail=None):
   import dataclasses
 
   from barl_jax.checkpoints import load_policy
@@ -75,6 +76,16 @@ def evaluate(path, env_name, modes, *, episodes, num_envs, num_candidates, seed,
   try:
     policy = load_policy(path, single, env_stats=environment.get_env_stats(single))
     vector = environment.get_vector_env(min(episodes, num_envs))
+    # `detail`, given, collects what the wandb logger needs and the result JSON
+    # deliberately does not carry: every mode's raw per-step episode records
+    # (with the critic's Q at each executed action) and the critic's gamma.
+    extra = {}
+    if detail is not None:
+      from barl_jax.inference_logger import critic_gamma, entropy_alpha, make_probe_fn
+      extra["probe"] = make_probe_fn(policy)
+      detail["gamma"] = critic_gamma(policy)
+      detail["alpha"] = entropy_alpha(policy)
+      detail["records"] = {}
     try:
       results = {}
       print(f"  {path}  env={env_name}  {episodes} episode(s) x {len(modes)} mode(s) {modes}")
@@ -107,7 +118,9 @@ def evaluate(path, env_name, modes, *, episodes, num_envs, num_candidates, seed,
         # built up to before raising.
         try:
           records = run_episodes(SeedActor(policy, executor), vector, episodes,
-                                 render=False, seed=seed)
+                                 render=False, seed=seed, **extra)
+          if detail is not None:
+            detail["records"][mode] = records
           returns = np.asarray([sum(r["rewards"]) for r in records])
           results[mode] = {"mean_return": float(returns.mean()),
                            "std_return": float(returns.std()),
@@ -127,7 +140,7 @@ def evaluate(path, env_name, modes, *, episodes, num_envs, num_candidates, seed,
 # One source of truth for a run's optional keys, shared by argparse's own
 # `default=`, a `--config` entry's fallback when it omits a key, and the
 # `--config`/single-path mutual-exclusion check in main() -- see there.
-DEFAULTS = dict(checkpoint="best", mode=["DirectExecutor"], episodes=10, num_envs=8,
+DEFAULTS = dict(checkpoint="best", mode=["DirectExecutor"], episodes=5, num_envs=8,
                 num_candidates=8, top_k=2, sigma=0.1, seed=0)
 
 
@@ -149,7 +162,7 @@ def load_eval_config(path) -> tuple[str | None, list[dict]]:
   return data.get("output"), [{**defaults, **run} for run in runs]
 
 
-def evaluate_entry(entry: dict) -> dict:
+def evaluate_entry(entry: dict, logger=None) -> dict:
   """One fully-resolved run (a `--config` entry merged with its `defaults:`,
   or the single path/flags the plain CLI was given) -> `{checkpoint_path:
   {mode: result}}` -- `entry["path"]` may itself be one policy checkpoint, a
@@ -168,13 +181,18 @@ def evaluate_entry(entry: dict) -> dict:
       env_name = entry.get("env") or environment_name(path)
       if not env_name:
         raise ValueError("no saved environment found; set `env` for this run")
+      detail = {} if logger is not None else None
       out[str(path)] = evaluate(
         path, env_name, entry.get("mode", DEFAULTS["mode"]),
         episodes=entry.get("episodes", DEFAULTS["episodes"]),
         num_envs=entry.get("num_envs", DEFAULTS["num_envs"]),
         num_candidates=entry.get("num_candidates", DEFAULTS["num_candidates"]),
         top_k=entry.get("top_k", DEFAULTS["top_k"]), sigma=entry.get("sigma", DEFAULTS["sigma"]),
-        seed=entry.get("seed", DEFAULTS["seed"]))
+        seed=entry.get("seed", DEFAULTS["seed"]), detail=detail)
+      if logger is not None and detail.get("records"):
+        logger.log_checkpoint(path, sweep_root=root, env_name=env_name, entry=entry,
+                              records=detail["records"], gamma=detail["gamma"],
+                              alpha=detail["alpha"])
     except Exception as exc:
       tb = _log_failure(f"  {path}", exc)
       out[str(path)] = {"error": f"{type(exc).__name__}: {exc}", "traceback": tb}
@@ -204,6 +222,12 @@ def main():
                       help="Only used by --mode PerturbExecutor")
   parser.add_argument("--seed", type=int, default=DEFAULTS["seed"],
                       help="Shared evaluation seed for paired comparisons")
+  parser.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True,
+                      help="Log every rollout to wandb (default on; --no-wandb to skip): one run "
+                           "per episode, grouped <sweep>/<mode>, with per-step reward, summed "
+                           "reward and critic Q / overestimation. See barl_jax.inference_logger")
+  parser.add_argument("--wandb-project", default="BA-RL")
+  parser.add_argument("--wandb-group", help="Defaults to the evaluated path's directory name")
   parser.add_argument("--json", action="store_true", help="Print the combined results as JSON too")
   args = parser.parse_args()
 
@@ -225,6 +249,11 @@ def main():
                     seed=args.seed)]
     output = args.output
 
+  logger = None
+  if args.wandb:
+    from barl_jax.inference_logger import InferenceLogger
+    logger = InferenceLogger(args.wandb_project, group=args.wandb_group)
+
   print(f"Evaluating {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
        + (f" from {args.config}" if args.config else ""))
   t0 = time.perf_counter()
@@ -238,7 +267,7 @@ def main():
     for i, entry in enumerate(entries):
       print(f"[{i + 1}/{len(entries)}]")
       try:
-        results.update(evaluate_entry(entry))
+        results.update(evaluate_entry(entry, logger) if logger is not None else evaluate_entry(entry))
       except Exception as exc:
         key = entry.get("path", f"entry[{i}]")
         tb = _log_failure(f"  {key}", exc)
