@@ -6,6 +6,7 @@ from pathlib import Path
 import gymnasium as gym
 import numpy as np
 import pytest
+from conftest import small_model
 
 from barl_jax.checkpoints import save_policy
 from barl_jax.env import Environment
@@ -56,7 +57,7 @@ def test_evaluate_restores_checkpoint_and_pairs_modes(tmp_path, monkeypatch):
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, tmp_path / "best")
   finally:
     env.close()
@@ -116,7 +117,7 @@ def test_evaluate_entry_reads_env_from_saved_config_when_omitted(tmp_path, monke
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()
@@ -140,7 +141,7 @@ def test_main_writes_config_results_to_output_json(tmp_path, monkeypatch, capsys
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()
@@ -177,7 +178,7 @@ def test_evaluate_isolates_a_crashing_mode_and_keeps_the_rest(tmp_path, monkeypa
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()
@@ -211,7 +212,7 @@ def test_main_writes_partial_results_when_one_entry_crashes(tmp_path, monkeypatc
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()

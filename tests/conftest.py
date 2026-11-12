@@ -209,6 +209,19 @@ def act():
     return jnp.tanh(jax.random.normal(jax.random.PRNGKey(2), (BATCH, ACT_DIM)))
 
 
+def small_model(name: str):
+    """`name`'s default model with narrow networks. The policy-level tests check
+    contracts (loss keys, gating, checkpoints, executors), which do not depend on
+    width; a default 2048-wide critic only makes them slow and memory-hungry on
+    the CPU these tests run on."""
+    from barl_jax.config.schemas import model_schema
+    model = model_schema(name)()
+    small = {"critic": {"latent_dim": 16}}
+    if hasattr(model.components.actor, "latent_dim"):
+        small["actor"] = {"latent_dim": 16}
+    return model.overridden({"components": small})
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _release_compiled_functions():
     """Drop compiled functions after each test module. Tests build their own
