@@ -250,8 +250,9 @@ def test_submit_eval_end_to_end_through_local_executor(tmp_path):
     for algo in ("SAC", "NCLQL"):
         tag = f"{algo}_HalfCheetah_1seeds"
         _save_small_policy(algo, trained / tag / "checkpoints" / "seed0" / "best")
+        # The single-run mapping the launcher itself writes next to a run.
         (trained / tag / "config.yaml").write_text(
-            f"runs: [{{model: {algo}, env: HalfCheetah, seed: 0}}]\n")
+            f"model: {algo}\nenv: HalfCheetah\nseed: 0\n")
 
     module = _load_submit()
 

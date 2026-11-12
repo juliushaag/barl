@@ -26,15 +26,29 @@ class ShortPendulum(Environment):
     return gym.make("Pendulum-v1", max_episode_steps=3)
 
 
-def test_checkpoint_discovery_and_saved_environment(tmp_path):
+@pytest.mark.parametrize("config", [
+  "model: SAC\nenv: HalfCheetah\n",                 # what the launcher and trainer write
+  "runs: [{model: SAC, env: HalfCheetah}]\n",        # the older one-entry list
+])
+def test_checkpoint_discovery_and_saved_environment(tmp_path, config):
   run = tmp_path / "arbitrary-run-name"
   best = run / "checkpoints" / "seed7" / "best"
   best.mkdir(parents=True)
   (best / "meta.json").write_text("{}")
-  (run / "config.yaml").write_text("runs: [{model: SAC, env: HalfCheetah}]\n")
+  (run / "config.yaml").write_text(config)
   assert checkpoints(tmp_path, "best") == [best]
   assert checkpoints(best, "final") == [best]
   assert checkpoints(tmp_path, "final") == []
+  assert environment_name(best) == "HalfCheetah"
+
+
+def test_saved_environment_is_read_from_a_config_the_launcher_wrote(tmp_path):
+  """Not a hand-written file: the exact config `launch.grid.materialize` emits."""
+  from launch import grid
+  runs = grid.materialize([{"algo": "SAC", "env": "HalfCheetah"}], ["run"], defaults={},
+                          sweep_dir=str(tmp_path), num_seeds=1)
+  best = (tmp_path / runs[0].config).parent / "checkpoints" / "seed0" / "best"
+  best.mkdir(parents=True)
   assert environment_name(best) == "HalfCheetah"
 
 
