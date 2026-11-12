@@ -81,10 +81,23 @@ logged Q-values are ordinary reward-scaled returns.
   different noisy returns, so they cannot share batch statistics; `batch` and
   `batchrenorm` are rejected.
 
+## Sampling the distribution
+
+`critic.return_samples(s, a, key, samples, steps)` draws from the learned return
+distribution. Euler integration reproduces the mean at any step count but
+underestimates the spread when steps are few: with an exact velocity field for a
+Gaussian return, the sampled std is 0 at 1 step, about 12% low at 10 steps and
+within 1% at 512. The one-step Q estimate used by `value()` is therefore
+unaffected, but use many steps when the shape of the distribution matters.
+
 ## Tests
 
-`tests/test_value_forcing.py` recomputes the backup by hand from the same random
-draws, and checks that the critic learns action-dependent values, converges to
+`tests/test_value_forcing.py` verifies the backup against a closed-form solution:
+for a self-loop with Gaussian rewards the noisy return at level `tau` is
+`N(tau * M, tau^2 S^2 + (1 - tau)^2)`, which fixes the exact velocity field, and
+that field must be a fixed point of the implemented backup (also with n-step
+returns, an entropy bonus, return scaling and terminal transitions). It also
+recomputes the loss by hand from the same random draws, and checks that the critic learns action-dependent values, converges to
 `1 / (1 - gamma)` on a constant-reward self-loop (reachable only by
 bootstrapping), and recovers a two-outcome return distribution instead of
 collapsing to its mean. `critic.return_samples(s, a, key)` draws from the

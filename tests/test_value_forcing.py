@@ -285,3 +285,96 @@ def test_policies_take_a_training_step_with_the_critic(model):
                                               jnp.asarray(0))
   assert all(bool(jnp.all(jnp.isfinite(v))) for v in losses.values())
   assert "critic/q/mean" in primary and "critic/velocity/mean" in primary
+
+
+# ---- against a closed-form solution ----------------------------------------------
+#
+# A self-loop with i.i.d. Gaussian rewards solves the flow Bellman equation in
+# closed form. With M and S the mean and std of the (normalised) return, the
+# noisy return at level tau is N(tau * M, tau^2 S^2 + (1 - tau)^2), and in one
+# dimension that family of marginals has exactly one velocity field:
+#
+#   u(z | tau) = M + (tau S^2 - (1 - tau)) / (tau^2 S^2 + (1 - tau)^2) * (z - tau M)
+
+
+class _ExactVelocity(nnx.Module):
+  """The closed-form field, plus `theta . basis(z, tau)` to probe the loss around it."""
+
+  def __init__(self, mean, std, n_models, probe=False):
+    self.mean, self.std, self.n = mean, std, n_models
+    self.theta = nnx.Param(jnp.zeros(6)) if probe else None
+
+  def __call__(self, obs, action, z, tau):
+    var = tau ** 2 * self.std ** 2 + (1 - tau) ** 2
+    u = self.mean + (tau * self.std ** 2 - (1 - tau)) / var * (z - tau * self.mean)
+    if self.theta is not None:
+      t = self.theta[...]
+      u = u + t[0] + t[1] * z + t[2] * tau + t[3] * z * tau + t[4] * z ** 2 + t[5] * tau ** 2
+    return jnp.broadcast_to(u, (self.n, *u.shape[-2:]))
+
+
+def _probe_gradient(critic, target_mean, target_std, mean, std, chunk_return, terminated,
+                    horizon, bonus, key):
+  """d loss / d theta at theta = 0 with the live net at the exact field: zero in
+  every probed direction iff the backup's regression target has the exact field
+  as its conditional mean."""
+  n = chunk_return.shape[0]
+  critic.target.net_target = _ExactVelocity(target_mean, target_std, critic.n_models)
+  critic.net = _ExactVelocity(mean, std, critic.n_models, probe=True)
+  obs, action = jnp.zeros((n, OBS_DIM)), jnp.zeros((n, ACT_DIM))
+
+  def loss(c):
+    return c.td_loss(obs, action, obs, action, chunk_return, terminated,
+                     jnp.full((n,), horizon, jnp.int32),
+                     entropy_bonus=jnp.full((n, 1), bonus), key=key)["critic"]
+
+  grads = nnx.grad(loss, argnums=nnx.DiffState(0, nnx.Param))(critic)
+  return np.abs(np.asarray(grads.net.theta[...])).max() / critic.n_models
+
+
+@pytest.mark.parametrize("gamma, mu, sigma, horizon, bonus, scale", [
+  (0.9, 1.0, 0.5, 1, 0.0, 1.0),          # the paper's one-step backup
+  (0.9, 1.0, 0.5, 3, 0.0, 1.0),          # n-step chunk returns
+  (0.99, -2.0, 3.0, 1, 0.5, 0.01),       # entropy bonus and the (1 - gamma) return scale
+  (0.95, 0.3, 1.0, 2, -1.5, 0.05),
+])
+def test_the_closed_form_flow_is_a_fixed_point_of_the_backup(gamma, mu, sigma, horizon, bonus,
+                                                              scale):
+  critic = _critic(gamma=gamma, flow_steps=64, return_scale=scale, latent_dim=8)
+  g = gamma ** horizon
+  chunk_mean = scale * mu * (1 - g) / (1 - gamma)
+  chunk_var = (scale * sigma) ** 2 * (1 - g ** 2) / (1 - gamma ** 2)
+  mean = (chunk_mean + g * scale * bonus) / (1 - g)       # Z = R + g (Z' + bonus)
+  std = math.sqrt(chunk_var / (1 - g ** 2))
+
+  n = 200_000
+  keys = jax.random.split(jax.random.key(0), 2)
+  rewards = mu + sigma * jax.random.normal(keys[0], (n, horizon))
+  chunk_return = (rewards * gamma ** jnp.arange(horizon)).sum(axis=1)
+  args = (chunk_return, jnp.zeros(n), horizon, bonus, keys[1])
+
+  at_fixed_point = _probe_gradient(critic, mean, std, mean, std, *args)
+  off_by_ten_percent = _probe_gradient(critic, 1.1 * mean + 0.1, std, mean, std, *args)
+  assert at_fixed_point < 0.02 * off_by_ten_percent
+
+  # The flow map, the sampled returns and the value agree with the closed form.
+  critic.net = _ExactVelocity(mean, std, critic.n_models)
+  obs, action = jnp.zeros((1, OBS_DIM)), jnp.zeros((1, ACT_DIM))
+  assert float(critic.value(obs, action)[0, 0]) * scale == pytest.approx(mean, abs=1e-3)
+  samples = scale * np.asarray(critic.return_samples(obs, action, keys[0], samples=20_000,
+                                                     steps=256))
+  assert samples.mean() == pytest.approx(mean, abs=0.03 * std + 1e-3)
+  assert samples.std() == pytest.approx(std, rel=0.05)
+
+
+def test_terminal_transitions_ignore_the_bootstrap_flow():
+  """With g = 0 the backup is plain flow matching onto the reward, whatever the
+  target network says about the next state."""
+  critic = _critic(gamma=0.9, flow_steps=8, return_scale=0.1, latent_dim=8)
+  n = 200_000
+  keys = jax.random.split(jax.random.key(3), 2)
+  reward = 2.0 + 0.7 * jax.random.normal(keys[0], (n,))
+  args = (reward, jnp.ones(n), 1, 0.0, keys[1])
+  exact = _probe_gradient(critic, 123.0, 5.0, 0.2, 0.07, *args)
+  wrong = _probe_gradient(critic, 123.0, 5.0, 0.25, 0.07, *args)
+  assert exact < 0.02 * wrong
