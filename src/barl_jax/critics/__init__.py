@@ -42,6 +42,7 @@ from barl_jax.critics.supports import (
   value_range,
 )
 from barl_jax.critics.targets import NoTargetConfig, PolyakConfig, TargetConfig
+from barl_jax.critics.value_forcing import ValueForcingCritic, ValueForcingCriticConfig
 
 __all__ = [
   "COMBINATION_RULES", "PRESETS",
@@ -53,5 +54,5 @@ __all__ = [
   "PolyakConfig", "QCritic", "QCriticConfig", "QNetwork", "ScalarHeadConfig",
   "SupportConfig", "TDConfig", "TargetConfig", "apply_preset", "categorical_projection",
   "crossq_mlp", "n_step_discount", "reduce_members", "scalar_td_target", "target_mlp",
-  "to_histogram", "value_range", "xqc_mlp",
+  "to_histogram", "value_range", "xqc_mlp", "ValueForcingCritic", "ValueForcingCriticConfig",
 ]

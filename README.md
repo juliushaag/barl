@@ -18,8 +18,8 @@ flow-matching one, is a one-line config change.
 - **Seven algorithms, one training step.** SAC, TD3, AMDP, DIME, SDAC, SDAC (paper
   version) and NCLQL share the same collection, replay, evaluation and checkpointing code.
 - **Critics made of parts.** Value head (scalar, C51, HL-Gauss) × fixed or learned
-  support × CrossQ-style or Polyak target × TD or noise-conditioned TD, plus the
-  flow-matching floq critic. Constraints such as XQC's weight norm work on any component.
+  support × CrossQ-style or Polyak target × TD or noise-conditioned TD, plus two
+  flow-matching return critics (floq and Value Forcing). Constraints such as XQC's weight norm work on any component.
 - **Multi-seed by default.** Seeds are `vmap`ped within a single run on one device.
 - **Inference-time action selection.** Best-of-N, top-k, mean, median and perturbation
   executors, all independent of the policy.
@@ -105,7 +105,7 @@ uv run python scripts/submit.py --algos SAC --envs HalfCheetah \
 
 | Slot | Built-in options |
 |------|------------------|
-| **Critic** | `QCritic` composed of parts ([docs](docs/components.md)); preset names `DirectCritic`, `EnsembleCritic`, `HLGaussCritic`, `C51Critic`; `FloqCritic` ([docs](docs/floq.md)) |
+| **Critic** | `QCritic` composed of parts ([docs](docs/components.md)); preset names `DirectCritic`, `EnsembleCritic`, `HLGaussCritic`, `C51Critic`; `FloqCritic` ([docs](docs/floq.md)); `ValueForcingCritic` ([docs](docs/value_forcing.md)) |
 | **Critic parts** | head: `Scalar`, `C51`, `HLGauss` · support: `FixedSupport`, `LearnedSupport` · target: `NoTarget`, `Polyak` · objective: `TD`, `NoiseConditionedTD` |
 | **Critic recipes** | `target_ensemble`, `xqc`, `nclql` |
 | **Constraints** | `WeightNorm`, on any trainable component (`constraints: [{class: WeightNorm}]`) |
@@ -182,6 +182,7 @@ examples/        CPU quickstart
 | Components, critic parts, constraints, backward compatibility | [docs/components.md](docs/components.md) |
 | Architecture, plugins and custom components | [docs/extending.md](docs/extending.md) |
 | Flow-matching critic (floq) | [docs/floq.md](docs/floq.md) |
+| Value Forcing critic | [docs/value_forcing.md](docs/value_forcing.md) |
 | NCLQL action sampling | [docs/nclql.md](docs/nclql.md) |
 | MyoSuite tasks | [docs/myosuite.md](docs/myosuite.md) |
 
