@@ -1,0 +1,25 @@
+# SAC with each distributional critic: C51, HL-Gauss, floq and Value Forcing,
+# every one at its own defaults, on DogRun and HumanoidRun. Everything not
+# listed (actor, steps, utd, logger) is the SAC default.
+#
+# The two families differ in more than the value representation:
+#   c51, hlgauss   2048x2 ReLU MLP, BatchRenorm, no target network (CrossQ-style),
+#                  learned value support
+#   floq, vf       512x3 GELU MLP, LayerNorm, Polyak target network
+# so a gap between the families is not attributable to the head alone.
+#
+#   uv run python scripts/submit.py --grid experiments/sac_critic_comparison.yaml --seeds 3 \
+#     --executor tmux --max-parallel 2 --sweep-dir sweeps/sac_critic_comparison
+
+axes:
+  algo: [SAC]
+  env: [DogRun, HumanoidRun]
+  model.components.critic:
+    - label: c51
+      class: C51Critic
+    - label: hlgauss
+      class: HLGaussCritic
+    - label: floq
+      class: FloqCritic
+    - label: vf
+      class: ValueForcingCritic

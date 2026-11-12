@@ -207,3 +207,33 @@ def obs():
 @pytest.fixture(scope="session")
 def act():
     return jnp.tanh(jax.random.normal(jax.random.PRNGKey(2), (BATCH, ACT_DIM)))
+
+
+def small_model(name: str):
+    """`name`'s default model with narrow networks. The policy-level tests check
+    contracts (loss keys, gating, checkpoints, executors), which do not depend on
+    width; a default 2048-wide critic only makes them slow and memory-hungry on
+    the CPU these tests run on."""
+    from barl_jax.config.schemas import model_schema
+    model = model_schema(name)()
+    small = {"critic": {"latent_dim": 16}}
+    if hasattr(model.components.actor, "latent_dim"):
+        small["actor"] = {"latent_dim": 16}
+    return model.overridden({"components": small})
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _release_compiled_functions():
+    """Drop compiled functions after each test module. Tests build their own
+    models, so nothing compiled is reused across modules. This slows a worker's
+    memory growth but does not stop it (JAX keeps some compiled code alive), so
+    CI additionally runs each test file in its own process."""
+    yield
+    import gc
+
+    from barl_jax import components
+
+    built.cache_clear()
+    components._INTERNED.clear()
+    jax.clear_caches()
+    gc.collect()

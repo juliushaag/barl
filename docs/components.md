@@ -46,8 +46,9 @@ From the command line, address any field by its path:
 
 `DirectCritic`, `EnsembleCritic`, `C51Critic` and `HLGaussCritic` are *presets*:
 registered names whose only difference is their default parts. `FloqCritic`
-replaces the network and the regression itself. It reuses the target part and
-the scalar head, and states what it cannot combine with in its own
+and `ValueForcingCritic` ([value_forcing.md](value_forcing.md)) replace the
+network and the regression themselves. They reuse the target part and the
+scalar head, and state what they cannot combine with in their own
 `config_problems`.
 
 Named recipes (`target_ensemble`, `xqc`, `nclql`) are partial configs in
