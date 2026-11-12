@@ -1,7 +1,7 @@
 """Optimizer ownership, partitioning, gradient steps, and schedules."""
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 
 import jax
@@ -11,6 +11,7 @@ from flax import nnx
 
 from barl_jax.components import TRAINABLE
 from barl_jax.metrics import DEBUG, PRIMARY, DebugMetric, Metric, armed, collect, recording
+from barl_jax.networks.constraints import ConstraintConfig
 
 
 class OptimizerMixin:
@@ -35,14 +36,15 @@ class OptimizerMixin:
     return cache["value"]
 
   def metrics_key(self, optimizer_key: str, field: str) -> str:
-    """`critic/loss` when the slot owns one optimizer key, `actor/loss/flow`
-    when it owns several -- so the common case stays flat."""
+    """`critic/loss` for a slot's only key or the key named after the slot, and
+    `critic/loss/support` for its auxiliary keys -- so the main series keeps the
+    same name whether or not the slot also trains something else."""
     owners = self.optimizer_slots()
     if optimizer_key not in owners:  # no component owns it -- always name it
       return f"{self.algo_name()}/{field}/{optimizer_key}"
     slot   = owners[optimizer_key]
     shared = sum(1 for o in owners.values() if o == slot) > 1
-    return f"{slot}/{field}/{optimizer_key}" if shared else f"{slot}/{field}"
+    return f"{slot}/{field}/{optimizer_key}" if shared and optimizer_key != slot else f"{slot}/{field}"
 
   def create_optimizer(self) -> dict:
     """Optimizer key -> optax transform, unioned over every slot. A Policy with
@@ -241,10 +243,13 @@ def gated_losses(policy, fn, keys, *modules):
 
 @dataclass(frozen=True)
 class OptimizerConfig:
+  """The Adam knobs every trainable component has, plus the parameter
+  `constraints` projected onto its networks after each step."""
   lr: float = 3.0e-4
   adam_b1: float = 0.9
   grad_clip: float = 1.0
   grad_clip_mode: str = "element"
+  constraints: tuple[ConstraintConfig, ...] = field(default_factory=tuple)
 
   def problems(self) -> list[str]:
     if self.grad_clip_mode in CLIP_MODES:

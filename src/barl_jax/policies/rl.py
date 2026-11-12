@@ -146,8 +146,8 @@ class RLPolicy(Policy):
       self.actor.generate_action(next_obs, critic=self.critic, key=keys[0]))
 
     extra = {}
-    if self.critic.uses_cql:
-      extra["cql_samples"] = self.cql_samples(obs, next_obs, self.rngs.noise())
+    if getattr(self.critic, "policy_samples", 0):
+      extra["policy_samples"] = self.policy_samples(obs, next_obs, self.rngs.noise())
     losses.update(self.critic.td_loss(
       obs, action, next_obs, next_action, chunk_return, terminated, horizon,
       entropy_bonus=self.target_entropy_bonus(alpha, entropy), key=keys[-1], **extra))
@@ -167,16 +167,17 @@ class RLPolicy(Policy):
 
     return losses
 
-  def cql_samples(self, obs, next_obs, key):
-    """`(curr, curr_logp, next, next_logp)`: `cql.n_actions` policy actions (n, B, A)
-    and their log-densities (n, B) at `obs` and `next_obs`, for the CQL penalty."""
-    n, b = self.critic.config.cql.n_actions, obs.shape[0]
+  def policy_samples(self, obs, next_obs, key):
+    """`(curr, curr_logp, next, next_logp)`: `critic.policy_samples` policy actions
+    (n, B, A) and their log-densities (n, B) at `obs` and `next_obs`, for a critic
+    objective that prices them (CQL)."""
+    n, b = self.critic.policy_samples, obs.shape[0]
 
     def draw(states, key):
       repeated = jnp.broadcast_to(states, (n,) + states.shape).reshape(n * b, -1)
       action, entropy = self.actor.generate_action(repeated, critic=self.critic, key=key)
       if entropy is None:
-        raise ValueError("CQL needs an actor that reports its sample entropy")
+        raise ValueError("this critic objective needs an actor that reports its sample entropy")
       return jax.lax.stop_gradient((action.reshape(n, b, -1), -entropy.reshape(n, b)))
 
     curr_key, next_key = jax.random.split(key)

@@ -12,14 +12,12 @@ axes:
   model.components.critic:
     - label: xqc_hlgauss
       class: HLGaussCritic
-      learn_support: true
-      num_bins: 101
-      entropy_coef: 0.0
+      head: {num_bins: 101, entropy_coef: 0.0, support: {class: LearnedSupport}}
       latent_dim: 512
       layers: 3
       adam_b1: 0.9
-      weight_norm: true
-      target: {kind: polyak, joint_forward: true}
+      constraints: [{class: WeightNorm}]
+      target: {class: Polyak, joint_forward: true}
       ensemble: {n_models: 2, value_reduce: mean, target_reduce: mean}
       mlp: {class_name: MLP, activation: relu, norm: batch, norm_input: true, norm_stem: true,
             norm_after_act: false, norm_kwargs: {momentum: 0.99, epsilon: 1.0e-3}}

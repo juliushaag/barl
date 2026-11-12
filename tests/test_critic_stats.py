@@ -40,13 +40,17 @@ def two_point(c, half_width: int):
     return probs, float(0.5 * (support[lo] + support[hi])), float(0.5 * (support[hi] - support[lo]))
 
 
-def fixed(name, **extra):
+def fixed(name, *, num_bins=None, v_min=None, v_max=None, **extra):
     """A head on its configured, non-moving support."""
-    return build(name, learn_support=False, **extra)
+    head = {"support": {"class": "FixedSupport", "v_min": v_min, "v_max": v_max}}
+    if num_bins is not None:
+        head["num_bins"] = num_bins
+    return build(name, head=head, **extra)
 
 
 def bin_width(c):
-    return (c.v_max - c.v_min) / c.config.num_bins
+    lo, hi = c.head.support.bounds()
+    return (hi - lo) / c.head.config.num_bins
 
 
 # ----------------------------------------------------------------------
@@ -82,7 +86,7 @@ def test_histogram_target_discards_the_spread(name, boot_value):
                               jnp.full((1, 1), boot_value))
     mean, std = moments(c.support_values(), target)
 
-    smoothing = jnp.sqrt(c.sigma ** 2 + bin_width(c) ** 2 / 12)
+    smoothing = jnp.sqrt(c.head.support.sigma ** 2 + bin_width(c) ** 2 / 12)
     assert float(mean[0]) == pytest.approx(c.config.gamma * boot_value, abs=1e-3)
     assert float(std[0]) == pytest.approx(float(smoothing), rel=1e-3)
 
@@ -100,7 +104,7 @@ def test_histogram_of_a_scalar_is_a_discretized_gaussian(name, value):
     assert float(hist.sum()) == pytest.approx(1.0, abs=1e-5)
     assert float(mean[0]) == pytest.approx(value, abs=1e-3)
     assert float(std[0]) == pytest.approx(
-        float(jnp.sqrt(c.sigma ** 2 + bin_width(c) ** 2 / 12)), rel=1e-3)
+        float(jnp.sqrt(c.head.support.sigma ** 2 + bin_width(c) ** 2 / 12)), rel=1e-3)
 
 
 # ----------------------------------------------------------------------
@@ -255,20 +259,20 @@ def test_projection_saturates_once_the_reward_leaves_the_contraction_interior():
 def test_noise_level_conditions_the_prediction(name, obs, act):
     """Through `frozen`, as the Langevin sampler prices: a train-mode batch
     normalization would zero a level that is constant across the batch."""
-    c = frozen(build(name, noise={"enabled": True}))
+    c = frozen(build(name, objective={"class": "NoiseConditionedTD"}))
     assert not jnp.allclose(c.expectation(obs, act, level=0), c.expectation(obs, act, level=3)), \
         "levels embed identically"
-    assert jnp.array_equal(c.expectation(obs, act), c.expectation(obs, act, level=c.noise.clean_level))
+    assert jnp.array_equal(c.expectation(obs, act), c.expectation(obs, act, level=c.objective.clean_level))
 
 
 @pytest.mark.parametrize("name", HEADS)
 def test_smoothing_coefficient_is_actually_wired_in(name, obs, act, key):
     """TD at the clean level and smoothing of the noisier ones fold into one
     `losses["critic"]`, since both fit the same heads."""
-    c = build(name, noise={"enabled": True})
+    c = build(name, objective={"class": "NoiseConditionedTD"})
 
     def loss_at(coef):
-        c.config = replace(c.config, noise=replace(c.config.noise, smoothing_coef=coef))
+        c.objective.config = replace(c.objective.config, smoothing_coef=coef)
         losses = c.td_loss(obs, act, obs[::-1], act, jnp.zeros((BATCH,)),
                            jnp.zeros((BATCH,)), jnp.ones((BATCH,)), key=key)
         assert set(losses) == set(c.create_optimizer())

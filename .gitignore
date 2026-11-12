@@ -226,3 +226,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MuJoCo error log written to the working directory
+MUJOCO_LOG.TXT

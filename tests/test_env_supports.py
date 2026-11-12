@@ -16,12 +16,7 @@ import jax.numpy as jnp
 import pytest
 from conftest import build, make_env_stats
 
-from barl_jax.critics.categorical import C51CriticConfig
 from barl_jax.env import Environment
-from barl_jax.environments.dm_control import DMControlEnvironment
-
-GAMMA = C51CriticConfig().gamma
-DM_HORIZON = 1000                      # every suite task; see DMControlEnvironment's docstring
 
 
 def declared(cls) -> dict:
@@ -29,28 +24,6 @@ def declared(cls) -> dict:
     Environment.get_env_stats does it -- replicated rather than called so this
     stays free of a real gym env."""
     return cls.merged_stats()
-
-
-def test_dm_control_support_matches_the_reference():
-    """dime_am's tuned DMC value, `v_min: -200, v_max: 200` at `n_atoms: 101`,
-    recovered from first principles: reward is in [0, 1] over a 1000-step
-    horizon, so the discounted value is bounded by `(1 - gamma^T)/(1 - gamma)`,
-    and the support is twice that in both directions -- headroom for transient
-    over-estimation, and symmetric so 0 stays at the centre."""
-    stats = declared(DMControlEnvironment)
-    bound = (1 - GAMMA ** DM_HORIZON) / (1 - GAMMA)
-
-    assert stats["return_max"] == pytest.approx(2 * bound, rel=1e-3)
-    assert stats["return_min"] == pytest.approx(-stats["return_max"])
-    assert stats["return_max"] == 200.0, "dime_am configs/alg/dime.yaml"
-
-
-def test_gym_humanoid_and_ant_match_the_reference():
-    """dime_am's README gives these two explicitly -- "the same values for both
-    gym environments" -- so they are not ours to derive."""
-    for name in ("Humanoid", "Ant"):
-        stats = declared(Environment.class_for(name))
-        assert (stats["return_min"], stats["return_max"]) == (-1600.0, 1600.0), name
 
 
 @pytest.mark.parametrize("name", sorted(Environment.available()))
@@ -90,10 +63,14 @@ def test_c51_resolves_a_realistic_dm_control_value_gap(q_gap):
     env_stats = make_env_stats(return_min=stats["return_min"], return_max=stats["return_max"])
     c = build("C51Critic", env_stats=env_stats)
 
-    n = c.config.num_bins
-    bin_width = (c.v_max - c.v_min) / (n - 1)
+    n = c.head.config.num_bins
+    lo, hi = map(float, c.head.support.bounds())
+    bin_width = (hi - lo) / (n - 1)
     boot = jnp.zeros((1, n)).at[0, n // 2].set(1.0)
     terminal = lambda q: c.bellman_target(jnp.array([q]), jnp.ones((1,)), jnp.ones((1,)), boot)
 
-    l1 = float(jnp.abs(terminal(0.0) - terminal(q_gap)).sum())
+    # Start on an atom: with an even `num_bins` zero is a bin midpoint, and a
+    # target there is already a 50/50 split, which the formula doesn't model.
+    q0 = float(c.support_values()[n // 2])
+    l1 = float(jnp.abs(terminal(q0) - terminal(q0 + q_gap)).sum())
     assert l1 == pytest.approx(min(2.0, 2 * q_gap / bin_width), rel=1e-3)

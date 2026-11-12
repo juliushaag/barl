@@ -51,10 +51,15 @@ def checkpoints(path: Path, checkpoint: str) -> list[Path]:
 
 
 def environment_name(path: Path) -> str | None:
+  """The env a checkpoint was trained on, from the nearest run `config.yaml`
+  above it: the single-run mapping the launcher and trainer write (`env:` at
+  the top level), or the older one-entry `runs:` list."""
   for parent in path.parents:
     config = parent / "config.yaml"
     if config.is_file():
       data = yaml.safe_load(config.read_text()) or {}
+      if data.get("env"):
+        return data["env"]
       runs = data.get("runs", [])
       if len(runs) == 1:
         return runs[0].get("env", data.get("defaults", {}).get("env"))

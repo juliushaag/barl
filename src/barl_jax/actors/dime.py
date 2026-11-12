@@ -90,7 +90,6 @@ class DISActor(ActorOptim, Actor):
   supplies the log-det, and adding it inside the integration would count it
   twice."""
 
-  kind = "actor"
   config_type = DISActorConfig
 
   def __init__(self, env_stats, config: DISActorConfig, *, rngs: nnx.Rngs, **kwargs):

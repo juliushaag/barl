@@ -6,6 +6,7 @@ from pathlib import Path
 import gymnasium as gym
 import numpy as np
 import pytest
+from conftest import small_model
 
 from barl_jax.checkpoints import save_policy
 from barl_jax.env import Environment
@@ -31,15 +32,29 @@ def _no_wandb(monkeypatch):
   monkeypatch.setenv("WANDB_MODE", "disabled")
 
 
-def test_checkpoint_discovery_and_saved_environment(tmp_path):
+@pytest.mark.parametrize("config", [
+  "model: SAC\nenv: HalfCheetah\n",                 # what the launcher and trainer write
+  "runs: [{model: SAC, env: HalfCheetah}]\n",        # the older one-entry list
+])
+def test_checkpoint_discovery_and_saved_environment(tmp_path, config):
   run = tmp_path / "arbitrary-run-name"
   best = run / "checkpoints" / "seed7" / "best"
   best.mkdir(parents=True)
   (best / "meta.json").write_text("{}")
-  (run / "config.yaml").write_text("runs: [{model: SAC, env: HalfCheetah}]\n")
+  (run / "config.yaml").write_text(config)
   assert checkpoints(tmp_path, "best") == [best]
   assert checkpoints(best, "final") == [best]
   assert checkpoints(tmp_path, "final") == []
+  assert environment_name(best) == "HalfCheetah"
+
+
+def test_saved_environment_is_read_from_a_config_the_launcher_wrote(tmp_path):
+  """Not a hand-written file: the exact config `launch.grid.materialize` emits."""
+  from launch import grid
+  runs = grid.materialize([{"algo": "SAC", "env": "HalfCheetah"}], ["run"], defaults={},
+                          sweep_dir=str(tmp_path), num_seeds=1)
+  best = (tmp_path / runs[0].config).parent / "checkpoints" / "seed0" / "best"
+  best.mkdir(parents=True)
   assert environment_name(best) == "HalfCheetah"
 
 
@@ -47,7 +62,7 @@ def test_evaluate_restores_checkpoint_and_pairs_modes(tmp_path, monkeypatch):
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, tmp_path / "best")
   finally:
     env.close()
@@ -107,7 +122,7 @@ def test_evaluate_entry_reads_env_from_saved_config_when_omitted(tmp_path, monke
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()
@@ -131,7 +146,7 @@ def test_main_writes_config_results_to_output_json(tmp_path, monkeypatch, capsys
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()
@@ -168,7 +183,7 @@ def test_evaluate_isolates_a_crashing_mode_and_keeps_the_rest(tmp_path, monkeypa
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()
@@ -202,7 +217,7 @@ def test_main_writes_partial_results_when_one_entry_crashes(tmp_path, monkeypatc
   family = ShortPendulum()
   env = family.get_env()
   try:
-    policy = Policy.make("SAC", env, env_stats=family.get_env_stats(env), seed=0)
+    policy = Policy.make("SAC", env, small_model("SAC"), env_stats=family.get_env_stats(env), seed=0)
     save_policy(policy, best)
   finally:
     env.close()

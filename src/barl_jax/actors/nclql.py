@@ -20,7 +20,8 @@ from barl_jax.registration import register_component, register_policy
 @dataclass(frozen=True)
 class LangevinActorConfig:
   class_name: str = "LangevinActor"
-  steps_per_level: list[int] = field(default_factory=lambda: [2, 3, 5])
+  # Substeps at each noise level, coarsest first; an int runs that many at every level.
+  steps_per_level: int | list[int] = field(default_factory=lambda: [2, 3, 5])
   step_lr: float = 1.0e-4
   max_step_size: float | None = 1.0e-3
   temperature: float = 500.0
@@ -38,9 +39,10 @@ class LangevinActorConfig:
   def problems(self):
     if self.sample_dtype not in DTYPES:
       return [f"sample_dtype={self.sample_dtype!r}: must be one of {sorted(DTYPES)}"]
-    if not self.steps_per_level or any(
-        not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in self.steps_per_level):
-      return ["steps_per_level must be a non-empty list of ints >= 1, one per noise level"]
+    steps = [self.steps_per_level] if isinstance(self.steps_per_level, int) else self.steps_per_level
+    if not steps or any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in steps):
+      return ["steps_per_level must be an int >= 1 or a non-empty list of ints >= 1, "
+              "one per noise level"]
     if self.max_step_size is not None and not (
         math.isfinite(self.max_step_size) and self.max_step_size > 0):
       return ["max_step_size must be None or finite and > 0"]
@@ -67,7 +69,6 @@ class LangevinActor(ActionSampler):
   """
 
   config_type = LangevinActorConfig
-  kind = "sampler"
   critic_objective = "noise_td"
 
   def __init__(self, env_stats, config: LangevinActorConfig, *, rngs, **kwargs):
@@ -95,10 +96,11 @@ class LangevinActor(ActionSampler):
       raise ValueError("LangevinActor requires a noise-conditioned critic")
     key = self.next_key(key)
     config = self.config
-    sigmas = critic.noise.sigmas[...]
+    sigmas = critic.objective.sigmas[...]
     if config.sample_dtype != "float32":
       critic = reduced_precision(critic, DTYPES[config.sample_dtype])
-    steps = tuple(config.steps_per_level)
+    steps = config.steps_per_level
+    steps = (steps,) * int(sigmas.size) if isinstance(steps, int) else tuple(steps)
     if len(steps) != sigmas.size:
       raise ValueError(f"steps_per_level has {len(steps)} entries but the critic's noise "
                        f"ladder has {sigmas.size} levels")

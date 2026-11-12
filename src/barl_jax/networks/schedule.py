@@ -49,7 +49,6 @@ class Schedule(Component, nnx.Module, ABC):
   runs `start` -> `end` over the remaining `steps - warmup`, then stays flat at
   `end` (so a `steps` estimate that undershoots the real run is harmless)."""
 
-  kind     = "schedule"
   config_type = ScheduleConfig
 
   def __init__(self, env_stats=None, config=None, **kw):

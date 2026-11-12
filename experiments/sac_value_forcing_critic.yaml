@@ -1,0 +1,20 @@
+# SAC with the Value Forcing critic (arXiv:2611.02160) against the default C51
+# critic and floq, on the envs of experiments/sac_distributional_critics.yaml.
+# The Value Forcing rows also cross the bootstrap reduction: `mean` (each member
+# from its own target copy) and `min` (both from the lower target member).
+#
+#   uv run python scripts/submit.py --grid experiments/sac_value_forcing_critic.yaml --seeds 2 \
+#     --executor tmux --max-parallel 2 --sweep-dir sweeps/sac_value_forcing_critic
+
+axes:
+  algo: [SAC]
+  env: [DogRun, HumanoidRun]
+  model.components.critic:
+    - label: c51
+    - label: floq
+      class: FloqCritic
+    - label: vf
+      class: ValueForcingCritic
+    - label: vf-min
+      class: ValueForcingCritic
+      ensemble: {target_reduce: min}

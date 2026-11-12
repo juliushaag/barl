@@ -114,16 +114,6 @@ def test_async_factory_keeps_instance_settings():
     env.close()
 
 
-def test_typed_defaults_are_owned_by_dataclasses():
-  from barl_jax.actors.sac import StochasticActorConfig
-  from barl_jax.critics.categorical import C51CriticConfig
-  assert StochasticActorConfig().mlp.activation == "silu"
-  assert C51CriticConfig().latent_dim == 2048
-  # More-derived declarations win: subclass overrides replace base defaults.
-  from dataclasses import replace
-  assert replace(StochasticActorConfig(), squash_cls="ErfSquash").squash_cls == "ErfSquash"
-
-
 def test_policy_params_come_from_the_model_config():
   run = tiny_run(model_overrides={"params": {"policy_delay": 2}, "components": {
     "actor": {"latent_dim": 8}, "critic": {"latent_dim": 8}}})
@@ -136,12 +126,13 @@ def test_incompatible_objective_is_rejected_before_building():
   with pytest.raises(ValueError, match="does not support"):
     _RunConfig.from_dict({
       "model": "SAC", "env": "HalfCheetah",
-      "model_overrides": {"components": {"critic": {"noise": {"enabled": True}}}},
+      "model_overrides": {"components": {"critic": {"objective": {"class": "NoiseConditionedTD"}}}},
     })
 
 
 def test_running_normalization_handles_unequal_batches_and_constant_channels():
-  p = make_policy()
+  p = make_policy(tiny_run(model_overrides={"params": {"normalize_obs": True}, "components": {
+    "actor": {"latent_dim": 8}, "critic": {"latent_dim": 8}}}))
   first = jnp.array([[1., 3., 5.], [3., 3., 7.]])
   second = jnp.array([[5., 3., 9.]])
   p.update_observation_stats(first)

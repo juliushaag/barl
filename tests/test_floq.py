@@ -249,13 +249,13 @@ def test_floq_value_has_a_finite_nonzero_action_gradient():
 def test_floq_target_copy_tracks_live_flow_but_keeps_live_parameters_intact():
   critic = _critic()
   assert critic.has_target
-  before_target = jax.tree.map(jnp.copy, nnx.state(critic.net_target, nnx.Param))
+  before_target = jax.tree.map(jnp.copy, nnx.state(critic.target.net_target, nnx.Param))
   live_before = jax.tree.map(jnp.copy, nnx.state(critic.net, nnx.Param))
   nnx.update(critic.net,
              jax.tree.map(lambda x: x + 0.5, nnx.state(critic.net, nnx.Param)))
   live_after = nnx.state(critic.net, nnx.Param)
   critic.after_step()
-  target_after = nnx.state(critic.net_target, nnx.Param)
+  target_after = nnx.state(critic.target.net_target, nnx.Param)
   assert any(not np.array_equal(a, b)
              for a, b in zip(jax.tree.leaves(before_target), jax.tree.leaves(target_after)))
   assert all(np.all(np.isfinite(g)) for g in jax.tree.leaves(target_after))
@@ -279,7 +279,7 @@ def test_floq_td_loss_matches_sampled_flow_matching_equation():
   live = _AffineEnsemble(0.2, 0.1, critic.n_models)
   target_field = _AffineEnsemble(-0.1, 0.04, critic.n_models)
   critic.net = live
-  critic.net_target = target_field
+  critic.target.net_target = target_field
   data = _batch()
   entropy_bonus = jnp.full((BATCH, 1), 0.3)
   key = jax.random.PRNGKey(31)
@@ -318,7 +318,7 @@ def test_floq_td_loss_matches_sampled_flow_matching_equation():
     entropy_bonus=entropy_bonus, key=key)["critic"],
     argnums=nnx.DiffState(0, nnx.Param))(critic)
   grad_state = nnx.state(grads, nnx.Param)
-  assert all(bool(jnp.all(g == 0)) for g in jax.tree.leaves(grad_state["net_target"]))
+  assert all(bool(jnp.all(g == 0)) for g in jax.tree.leaves(grad_state["target"]["net_target"]))
   assert any(bool(jnp.any(g != 0)) for g in jax.tree.leaves(grad_state["net"]))
   np.testing.assert_allclose(got, expected, rtol=2e-5, atol=2e-6)
 
@@ -377,7 +377,7 @@ def test_floq_distill_target_is_stop_gradient_and_matches_flow_returns():
   _, flow_only = grads(False)
 
   assert any(bool(jnp.any(g != 0)) for g in jax.tree.leaves(with_distill["q_net"]))
-  assert all(bool(jnp.all(g == 0)) for g in jax.tree.leaves(with_distill["net_target"]))
+  assert all(bool(jnp.all(g == 0)) for g in jax.tree.leaves(with_distill["target"]["net_target"]))
   # Distillation must not reach the field: its gradient equals the flow-matching-only one.
   for got, want in zip(jax.tree.leaves(with_distill["net"]), jax.tree.leaves(flow_only["net"])):
     np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-7)

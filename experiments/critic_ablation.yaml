@@ -18,11 +18,11 @@ axes:
   model.components.critic:
     - label: plain
       class: DirectCritic
-      target: {kind: polyak, joint_forward: false}
+      target: {class: Polyak, joint_forward: false}
       mlp: {class_name: MLP, activation: relu, norm: none}
     - label: doubleq
       class: EnsembleCritic
-      target: {kind: polyak, joint_forward: false}
+      target: {class: Polyak, joint_forward: false}
       mlp: {class_name: MLP, activation: relu, norm: none}
     - label: crossq
       class: DirectCritic

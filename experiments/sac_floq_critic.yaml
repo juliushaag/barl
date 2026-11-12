@@ -2,7 +2,7 @@
 # experiments/sac_distributional_critics.yaml so the two sweeps line up in wandb.
 #
 # floq is a scalar flow-matching critic, not a categorical head: it has no
-# learn_support / entropy_coef, rejects weight_norm, and always uses its own
+# support or entropy_coef, rejects constraints, and always uses its own
 # LayerNorm MLP with separate target forwards. So only the axes it honours are
 # crossed here: target net (polyak, as in the paper, or none) x ensemble reduction.
 #

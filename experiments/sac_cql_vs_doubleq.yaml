@@ -21,23 +21,23 @@ axes:
   model.components.critic:
     - label: cql_c51
       class: C51Critic
-      target: {kind: polyak, joint_forward: false}
+      target: {class: Polyak, joint_forward: false}
       mlp: {class_name: MLP, activation: relu, norm: none}
       ensemble: {n_models: 2, value_reduce: mean, target_reduce: mean}
-      cql: {enabled: true}
+      objective: {class: CQL}
     - label: cql_hlgauss
       class: HLGaussCritic
-      target: {kind: polyak, joint_forward: false}
+      target: {class: Polyak, joint_forward: false}
       mlp: {class_name: MLP, activation: relu, norm: none}
       ensemble: {n_models: 2, value_reduce: mean, target_reduce: mean}
-      cql: {enabled: true}
+      objective: {class: CQL}
     - label: doubleq_c51
       class: C51Critic
-      target: {kind: polyak, joint_forward: false}
+      target: {class: Polyak, joint_forward: false}
       mlp: {class_name: MLP, activation: relu, norm: none}
       ensemble: {n_models: 2, value_reduce: min, target_reduce: min}
     - label: doubleq_hlgauss
       class: HLGaussCritic
-      target: {kind: polyak, joint_forward: false}
+      target: {class: Polyak, joint_forward: false}
       mlp: {class_name: MLP, activation: relu, norm: none}
       ensemble: {n_models: 2, value_reduce: min, target_reduce: min}

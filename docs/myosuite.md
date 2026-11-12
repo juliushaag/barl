@@ -32,12 +32,6 @@ muscle excitation transform. No extra activation remapping is applied.
 # Validate a submission without starting training.
 uv run python scripts/submit.py --algos SAC --envs MyoHandReachRandom --seeds 3 --dry-run
 
-# Short CPU training smoke run with local logging and two evaluations.
-BARL_ALLOW_CPU=1 JAX_PLATFORMS=cpu uv run python scripts/train.py --config experiments/sac_myosuite_smoke.yaml
-
-# Reload and evaluate the saved smoke checkpoint.
-JAX_PLATFORMS=cpu uv run python scripts/evaluate.py /tmp/barl-sac-myosuite-smoke --env MyoElbowPose1D6MRandom --mode DirectExecutor --episodes 2
-
 # GPU training with the usual defaults.
 uv run python scripts/submit.py --algos SAC --envs MyoLegWalk --seeds 3 --executor local
 

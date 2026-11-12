@@ -98,7 +98,74 @@ def interned_static(value) -> _Static:
   return static
 
 
-class Component:
+class PartTree:
+  """What a component and each of its parts share: the parts directly under it
+  (attributes that are `Part`s) contribute their optimizers, parameter
+  ownership, lifecycle hooks and derived values automatically, so a part is
+  added by assigning it -- nothing is registered by hand.
+
+  A part's config path, state path and metric namespace are the same: the
+  critic's `head.support` config builds `critic.head.support`, which logs
+  under `critic/head/support/*`."""
+
+  def parts(self) -> dict[str, "Part"]:
+    return {name: value for name, value in vars(self).items() if isinstance(value, Part)}
+
+  def create_optimizer(self) -> dict:
+    out = {}
+    for part in self.parts().values():
+      out.update(part.create_optimizer())
+    return out
+
+  def param_labels(self, subpath):
+    """The optimizer key owning the parameter at `subpath` under this node, or
+    None for the owner's default key. Delegates to the part at its head."""
+    if not subpath:
+      return None
+    part = self.parts().get(str(subpath[0]))
+    return part.param_labels(subpath[1:]) if part is not None else None
+
+  def before_step(self):
+    for part in self.parts().values():
+      part.before_step()
+
+  def after_step(self):
+    for part in self.parts().values():
+      part.after_step()
+
+  def reset_counters(self):
+    """Zero step counters (a target's delay clock) when weights are reused in a
+    fresh run."""
+    for part in self.parts().values():
+      part.reset_counters()
+
+  def derived(self) -> dict:
+    return {f"{name}.{key}": value for name, part in self.parts().items()
+            for key, value in part.derived().items()}
+
+
+class Part(PartTree, nnx.Module):
+  """One swappable piece of a component -- a critic's head, support, target or
+  objective. Built from its own typed config (a registered variant selected by
+  `class:`) and owning only its own state."""
+
+  def __init__(self, config=None):
+    self._config_s = _Static(config)
+
+  @property
+  def config(self):
+    return self._config_s.value
+
+  @config.setter
+  def config(self, value):
+    self._config_s.value = value
+
+  @property
+  def metrics(self) -> Recorder:
+    return Recorder(self)
+
+
+class Component(PartTree):
   """Mixin for anything `Policy.build_component()` constructs.
 
   Takes the run's `EnvStats` and its typed config as the first two positional
@@ -113,7 +180,7 @@ class Component:
   perturb one field with `c.config = replace(c.config, gamma=0.5)`.
 
   The owning Policy fans `before_step`/`after_step` out to every slot, and each
-  component has a `metrics` sink namespaced to its slot: `self.metrics.dist("critic",
+  component has a `metrics` sink namespaced to its slot: `self.metrics.dist("q",
   pred)` lands at `critic/q/*` without the component naming itself."""
 
   config_type = None
@@ -161,16 +228,18 @@ class Component:
 
   def before_step(self):
     """Called once per gradient step, before the Policy's train_step."""
-    ...
+    super().before_step()
 
   def after_step(self):
-    """Called once per gradient step, after every optimizer has stepped."""
-    ...
+    """Called once per gradient step, after every optimizer has stepped and
+    after the component's `constraints` were applied."""
+    super().after_step()
 
   def create_optimizer(self) -> dict:
     """Optimizer key -> optax transform. The keys must match the keys this
-    component's owning Policy returns from train_step."""
-    return {}
+    component's owning Policy returns from train_step. The default is the
+    union of the parts' keys."""
+    return super().create_optimizer()
 
   def derived(self) -> dict:
     """Values fixed at construction from something other than this component's
@@ -179,7 +248,7 @@ class Component:
     resolved kwarg and are not recoverable from config/ alone, so a Policy
     collects them into the run's logged config under `model/derived.*` rather
     than leaving them to be inferred."""
-    return {}
+    return super().derived()
 
 
 class ActionSampler(Component, nnx.Module, ABC):

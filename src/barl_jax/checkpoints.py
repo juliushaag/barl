@@ -13,7 +13,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-POLICY_VERSION = 3
+from barl_jax.compat import POLICY_VERSION, check_version, policy_class_for, restore_state
 
 
 @contextmanager
@@ -62,9 +62,7 @@ def saved_model(path, name=None):
   alone -- the saved model is authoritative, current defaults never fill in."""
   from barl_jax.config.schemas import model_schema
   meta = json.loads((Path(path) / "meta.json").read_text())
-  version = meta.get("format_version")
-  if version != POLICY_VERSION:
-    raise ValueError(f"Unsupported policy checkpoint version {version}")
+  check_version(meta.get("format_version"), kind="policy")
   if name is not None and name != meta["model"]:
     raise ValueError(f"Checkpoint contains {meta['model']!r}, requested {name!r}")
   saved = meta.get("spec")
@@ -79,22 +77,13 @@ def saved_model(path, name=None):
 
 
 def load_policy(path, env, env_stats=None, name=None, **kwargs):
-  import orbax.checkpoint as ocp
   from flax import nnx
 
   from barl_jax.policy import Policy
   path = Path(path).absolute()
   model, meta = saved_model(path, name)
-  policy = Policy.make(meta["model"], env, model, policy_class=meta["policy_type"],
+  policy = Policy.make(meta["model"], env, model, policy_class=policy_class_for(meta),
                        env_stats=env_stats, **kwargs)
-  target = nnx.state(policy)
-  with ocp.PyTreeCheckpointer() as ckpt:
-    restored = ckpt.restore(
-      path / "state",
-      args=ocp.args.PyTreeRestore(
-        item=target,
-        restore_args=ocp.checkpoint_utils.construct_restore_args(target),
-        partial_restore=True,
-    ))
-  nnx.update(policy, restored)
+  nnx.update(policy, restore_state(path / "state", nnx.state(policy), meta["format_version"]))
   return policy
+

@@ -23,9 +23,10 @@ from barl_jax.networks.mlp import MLPConfig
 from barl_jax.networks.time_embedding import FourierTimeConfig, TimeEmbeddingConfig
 from barl_jax.registration import register_component
 
-from .base import EnsembleConfig, QCritic, QNetwork, TargetConfig, value_range
-from .categorical import to_histogram
-from .direct import DirectCriticConfig, ScalarValue
+from .base import EnsembleConfig, QCritic, QCriticConfig, QNetwork
+from .heads import HeadConfig, ScalarHeadConfig, to_histogram
+from .supports import value_range
+from .targets import PolyakConfig, TargetConfig
 
 
 def _histogram(value, v_min, v_max, num_bins, sigma):
@@ -74,16 +75,16 @@ class FloqEnsemble(nnx.Module):
 
 
 @dataclass(frozen=True)
-class FloqCriticConfig(DirectCriticConfig):
+class FloqCriticConfig(QCriticConfig):
   class_name: str = "FloqCritic"
+  head: HeadConfig = field(default_factory=ScalarHeadConfig)
   latent_dim: int = 512
   layers: int = 3
   mlp: NetworkConfig = field(default_factory=lambda: MLPConfig(
     activation="gelu", norm="layer", norm_stem=True, norm_input=False,
     norm_after_act=True, dtype="float32"))
   ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
-  target: TargetConfig = field(default_factory=lambda: TargetConfig(kind="polyak",
-                                                                     joint_forward=False))
+  target: TargetConfig = field(default_factory=lambda: PolyakConfig(joint_forward=False))
   flow_steps: int = 8
   noise_samples: int = 8
   value_samples: int = 8
@@ -120,7 +121,8 @@ class FlowGeometry:
 
   @classmethod
   def build(cls, env_stats, config) -> "FlowGeometry":
-    v_min, v_max = value_range(env_stats, config, fallback=(-1.0, 1.0))
+    v_min, v_max = value_range(env_stats, config.v_min, config.v_max, config.reward_scale,
+                               fallback=(-1.0, 1.0))
     if not (math.isfinite(v_min) and math.isfinite(v_max) and v_min < v_max):
       raise ValueError("FloqCritic: value bounds must be finite with v_min < v_max")
     noise_min = v_min * float(config.noise_coverage)
@@ -137,12 +139,12 @@ class FlowGeometry:
 
 
 @register_component
-class FloqCritic(ScalarValue, QCritic):
-  """Scalar flow-matching critic. Shares the target net, reductions and
-  Bellman target with the other scalar critics; only the network, `raw` and the
-  regression objective differ."""
+class FloqCritic(QCritic):
+  """Scalar flow-matching critic. Shares the target part, reductions and
+  Bellman target with the other scalar critics; the network, `raw` and the
+  regression objective are its own, so it accepts only the scalar head, the
+  plain TD objective and no constraints."""
 
-  kind = "critic"
   config_type = FloqCriticConfig
 
   def __init__(self, env_stats, config, *, rngs: nnx.Rngs, **kwargs):
@@ -154,12 +156,12 @@ class FloqCritic(ScalarValue, QCritic):
   @classmethod
   def config_problems(cls, config) -> list[str]:
     problems = super().config_problems(config)
-    if config.noise.enabled:
-      problems.append("noise conditioning is not supported")
-    if config.cql.enabled:
-      problems.append("cql is not supported")
-    if config.weight_norm:
-      problems.append("weight_norm is not supported")
+    if config.head.class_name != "Scalar":
+      problems.append(f"head={config.head.class_name!r}: FloqCritic needs the Scalar head")
+    if config.objective.class_name != "TD":
+      problems.append(f"objective={config.objective.class_name!r}: FloqCritic trains on TD only")
+    if config.constraints:
+      problems.append("constraints are not supported: the flow field keeps its own LayerNorm MLP")
     if config.flow_steps < 1:
       problems.append(f"flow_steps must be >= 1, got {config.flow_steps}")
     if config.num_bins < 2:
@@ -227,7 +229,7 @@ class FloqCritic(ScalarValue, QCritic):
     uniform = lambda k, n: jax.random.uniform(k, (n, samples, 1), minval=self.noise_min,
                                               maxval=self.noise_max)
 
-    field_net = self.net_target if self.has_target else self.net
+    field_net = self.target.bootstrap_net(self.net)
     next_raw = self._integrate(field_net, next_obs, next_action,
                                uniform(target_key, next_obs.shape[0])).mean(axis=2)
     target = self.bellman_target(chunk_return, terminated, horizon,

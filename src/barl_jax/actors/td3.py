@@ -33,7 +33,6 @@ class DeterministicActor(ActorOptim, Actor):
   ascends Q at the noiseless mean. There is no entropy, so `generate_action`
   reports None."""
 
-  kind = "actor"
   config_type = DeterministicActorConfig
 
   def __init__(self, env_stats, config: DeterministicActorConfig, *, rngs: nnx.Rngs, **kwargs):

@@ -89,14 +89,6 @@ POLICY_SUPPLIED = {
 }
 
 
-def tiny_kwargs(name: str, **extra) -> dict:
-    # Legacy helper retained for introspection; new code builds typed configs
-    # via `typed_config`. Returns flat overrides only.
-    out = dict(TINY)
-    out.update(extra)
-    return out
-
-
 def typed_config(name: str, **extra):
   """Materialize a component's `config_type` defaults with overrides.
 
@@ -119,12 +111,6 @@ def typed_config(name: str, **extra):
   if unknown:
     raise KeyError(f"{name}: unknown config fields {sorted(unknown)}; "
                    f"available: {sorted(declared)}")
-  return merge(config_type(), values)
-
-
-def _merge_nested(config_type, values: dict):
-  """Apply overrides that may include nested dataclass fields."""
-  from barl_jax.config.serialization import merge
   return merge(config_type(), values)
 
 
@@ -154,9 +140,10 @@ def built(name: str):
 # bootstrap/normalization/reduction/objective choice `QCritic` accepts.
 HEADS = ("DirectCritic", "EnsembleCritic", "HLGaussCritic", "C51Critic")
 BOOTSTRAPS = {
-    "crossq": {"target": {"kind": "none", "joint_forward": True}},
-    "target": {"target": {"kind": "polyak", "joint_forward": False}},
-    "xqc": {"target": {"kind": "polyak", "joint_forward": True}, "weight_norm": True},
+    "crossq": {"target": {"class": "NoTarget", "joint_forward": True}},
+    "target": {"target": {"class": "Polyak", "joint_forward": False}},
+    "xqc": {"target": {"class": "Polyak", "joint_forward": True},
+            "constraints": [{"class": "WeightNorm"}]},
 }
 NORMS = {
     "none": {"mlp": {"norm": "none", "norm_kwargs": {}}},
@@ -164,7 +151,7 @@ NORMS = {
     "batchrenorm": {"mlp": {"norm": "batchrenorm", "norm_kwargs": crossq_mlp().norm_kwargs}},
 }
 REDUCES = {r: {"ensemble": {"value_reduce": r, "target_reduce": r}} for r in ("mean", "min")}
-OBJECTIVES = {"td": {}, "noise": {"noise": {"enabled": True}}}
+OBJECTIVES = {"td": {}, "noise": {"objective": {"class": "NoiseConditionedTD"}}}
 
 
 def _deep_merge(*dicts) -> dict:
@@ -214,10 +201,6 @@ def target_expectation(critic, target):
     return (target * critic.support_values()).sum(axis=-1)
 
 
-def params_of(module):
-    return jax.tree.leaves(nnx.state(module, nnx.Param))
-
-
 def finite(x) -> bool:
     return bool(jnp.all(jnp.isfinite(x)))
 
@@ -235,3 +218,33 @@ def obs():
 @pytest.fixture(scope="session")
 def act():
     return jnp.tanh(jax.random.normal(jax.random.PRNGKey(2), (BATCH, ACT_DIM)))
+
+
+def small_model(name: str):
+    """`name`'s default model with narrow networks. The policy-level tests check
+    contracts (loss keys, gating, checkpoints, executors), which do not depend on
+    width; a default 2048-wide critic only makes them slow and memory-hungry on
+    the CPU these tests run on."""
+    from barl_jax.config.schemas import model_schema
+    model = model_schema(name)()
+    small = {"critic": {"latent_dim": 16}}
+    if hasattr(model.components.actor, "latent_dim"):
+        small["actor"] = {"latent_dim": 16}
+    return model.overridden({"components": small})
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _release_compiled_functions():
+    """Drop compiled functions after each test module. Tests build their own
+    models, so nothing compiled is reused across modules. This slows a worker's
+    memory growth but does not stop it (JAX keeps some compiled code alive), so
+    CI additionally runs each test file in its own process."""
+    yield
+    import gc
+
+    from barl_jax import components
+
+    built.cache_clear()
+    components._INTERNED.clear()
+    jax.clear_caches()
+    gc.collect()

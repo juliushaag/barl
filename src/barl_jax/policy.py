@@ -21,6 +21,7 @@ from barl_jax.components import (
 from barl_jax.config.schemas import ModelConfig
 from barl_jax.env import EnvStats
 from barl_jax.metrics import Recorder
+from barl_jax.networks.constraints import apply_constraints
 from barl_jax.optimization import OptimizerMixin
 
 
@@ -210,6 +211,7 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
     component = cls(env_stats if env_stats is not None else self.env_stats, config, *args,
                     **explicit_kwargs)
     component.slot = slot
+    apply_constraints(component)
     return component
 
   def derived_config(self) -> dict:
@@ -260,6 +262,7 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
   def after_step(self):
     self.train_steps[...] += 1
     for component in self.components.values():
+      apply_constraints(component)
       component.after_step()
 
   # Observation normalisation

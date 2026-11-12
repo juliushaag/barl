@@ -1,5 +1,5 @@
-"""CQL(H) as a critic axis: the penalty is the importance-weighted logsumexp gap, it
-adds linearly to the head's own TD loss, and it needs a stat-free network."""
+"""CQL(H) as a critic objective: the penalty is the importance-weighted logsumexp gap,
+it adds linearly to the head's own TD loss, and it needs a stat-free network."""
 
 from dataclasses import replace
 
@@ -14,11 +14,11 @@ N = 3
 
 
 def cql_critic(name, **cql):
-  return build(name, mlp=PLAIN_MLP, cql={"enabled": True, "n_actions": N, **cql})
+  return build(name, mlp=PLAIN_MLP, objective={"class": "CQL", "n_actions": N, **cql})
 
 
 def samples(c, key):
-  a_dim = c.act_bounds.shape[-1]
+  a_dim = c.objective.act_bounds.shape[-1]
   k = jax.random.split(key, 4)
   actions = lambda kk: jnp.tanh(jax.random.normal(kk, (N, BATCH, a_dim)))
   return actions(k[0]), jax.random.normal(k[1], (N, BATCH)), actions(k[2]), jax.random.normal(k[3], (N, BATCH))
@@ -30,9 +30,9 @@ def test_penalty_is_the_importance_weighted_logsumexp_gap(name, obs, act, key):
   next_obs = obs[::-1]
   curr, curr_logp, nxt, nxt_logp = smp = samples(c, key)
   data = c.expectation_members(c.raw(obs, act))
-  got = c.cql_penalty(obs, next_obs, data, smp, key)
+  got = c.objective.penalty(c, obs, next_obs, data, smp, key)
 
-  low, high = np.asarray(c.act_bounds[...])
+  low, high = np.asarray(c.objective.act_bounds[...])
   rand = np.asarray(jax.random.uniform(key, curr.shape, jnp.float32, low, high))
   rand_logp = np.full((N, BATCH), -np.log(high - low).sum())
   q = lambda s, a: np.asarray(c.expectation_members(c.raw(
@@ -52,9 +52,9 @@ def test_penalty_adds_linearly_to_the_critic_loss(name, obs, act, key):
   smp = samples(c, key)
 
   def loss(alpha):
-    c.config = replace(c.config, cql=replace(c.config.cql, alpha=alpha))
+    c.objective.config = replace(c.objective.config, alpha=alpha)
     out = c.td_loss(obs, act, obs[::-1], act, jnp.zeros((BATCH,)), jnp.zeros((BATCH,)),
-                    jnp.ones((BATCH,)), key=key, cql_samples=smp)
+                    jnp.ones((BATCH,)), key=key, policy_samples=smp)
     assert set(out) == set(c.create_optimizer())
     return out["critic"]
 
@@ -65,11 +65,11 @@ def test_penalty_adds_linearly_to_the_critic_loss(name, obs, act, key):
 
 def test_cql_needs_samples_and_a_key(obs, act, key):
   c = cql_critic("DirectCritic")
-  with pytest.raises(ValueError, match="cql_samples"):
+  with pytest.raises(ValueError, match="policy_samples"):
     c.td_loss(obs, act, obs, act, jnp.zeros((BATCH,)), jnp.zeros((BATCH,)), jnp.ones((BATCH,)),
               key=key)
 
 
 def test_cql_rejects_batch_statistic_norms():
-  with pytest.raises(ValueError, match="cql"):
-    build("DirectCritic", cql={"enabled": True})
+  with pytest.raises(ValueError, match="CQL"):
+    build("DirectCritic", objective={"class": "CQL"})

@@ -11,4 +11,4 @@ axes:
       layers: 3
       mlp: {class_name: MLP, activation: relu, norm: batch, norm_input: true, norm_stem: true,
             norm_after_act: false, norm_kwargs: {momentum: 0.99, epsilon: 1.0e-3}, dtype: float32}
-      weight_norm: true
+      constraints: [{class: WeightNorm}]

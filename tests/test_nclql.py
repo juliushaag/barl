@@ -15,8 +15,8 @@ class _QuadraticCritic(nnx.Module):
   """An interior optimum: Q(a) = -||a||² / 2, at every noise level."""
 
   def __init__(self):
-    self.noise = nnx.Module()
-    self.noise.sigmas = Buffer(jnp.geomspace(0.1, 0.001, 8))
+    self.objective = nnx.Module()
+    self.objective.sigmas = Buffer(jnp.geomspace(0.1, 0.001, 8))
 
   def expectation(self, obs, action, *, level):
     return -0.5 * jnp.square(action).sum(axis=-1, keepdims=True)

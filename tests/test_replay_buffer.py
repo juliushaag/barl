@@ -1,6 +1,7 @@
 import gymnasium as gym
 import numpy as np
 import pytest
+from conftest import small_model
 
 from barl_jax.collection import Collector, RandomPolicy
 from barl_jax.multiseed import StackedPolicy, stack, unstack
@@ -20,7 +21,7 @@ def _stacked_fixture(num_seeds: int):
   environment = Environment.make("HalfCheetah")
   env = environment.get_env()
   stats = environment.get_env_stats(env)
-  policies = [Policy.make("SAC", env, env_stats=stats, seed=i) for i in range(num_seeds)]
+  policies = [Policy.make("SAC", env, small_model("SAC"), env_stats=stats, seed=i) for i in range(num_seeds)]
   optimizers = [nnx.Optimizer(p, p.build_optimizer(lr_schedule=None), wrt=TRAINABLE) for p in policies]
   graphdef, state = stack(list(zip(policies, optimizers)))
   return graphdef, state, policies[0], stats["obs_dim"]

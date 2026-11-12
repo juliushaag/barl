@@ -62,7 +62,6 @@ class ScoreContinuousActor(ActorOptim, Actor):
   `mlp`.
   Only the SDE and score-clipping knobs are this class's own."""
 
-  kind = "actor"
   config_type = ScoreContinuousActorConfig
 
   def __init__(self, env_stats, config: ScoreContinuousActorConfig, *, rngs: nnx.Rngs, **kwargs):

@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import ACT_DIM, BATCH, OBS_DIM, make_env_stats
+from conftest import ACT_DIM, BATCH, OBS_DIM, make_env_stats, small_model
 
 from barl_jax.components import sanitize_action
 from barl_jax.executors import (
@@ -516,7 +516,7 @@ class FakeEnv:
 
 
 def _make(name):
-  return Policy.make(name, FakeEnv(), env_stats=make_env_stats(), seed=0)
+  return Policy.make(name, FakeEnv(), small_model(name), env_stats=make_env_stats(), seed=0)
 
 
 def test_sac_supports_bon_and_scores_are_finite():

@@ -2,7 +2,8 @@
 
 NCLQL samples actions using a noise-conditioned critic and annealed Langevin
 updates. `steps_per_level` lists the number of substeps at each noise level
-(one entry per level of the critic's noise ladder, coarsest first); the chain
+(one entry per level of the critic's noise ladder, coarsest first; an int runs that many
+at every level); the chain
 runs as a single `lax.scan` over that schedule. The nominal step at level `i` is
 `alpha_i = step_lr * (sigma_i / sigma_last)^2`. The update adds
 `0.5 * alpha_i * temperature * score` and Gaussian noise with standard

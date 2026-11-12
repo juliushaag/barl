@@ -2,60 +2,85 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
-# Deliberately does not `uv sync` the root workspace: that pulls jax[cuda13]
-# and every simulator (dm-control, mani-skill, humanoid-bench, ...), which is
-# neither available nor needed on a CPU runner. Each job installs only the
-# standalone `src/barl_jax` library plus what it specifically needs, the way
-# an external user of the library would.
+# Deliberately does not `uv sync` the project: that pulls jax[cuda13] and every
+# simulator (dm-control, mani-skill, humanoid-bench via the third_party
+# submodule, ...), which is neither available nor needed on a CPU runner. Each
+# job installs the package with `--no-deps` plus only what it needs.
+env:
+  # The local executor shells out through `uv run` when uv is on PATH;
+  # UV_NO_SYNC makes that reuse the prepared .venv instead of syncing the
+  # full CUDA/simulator dependency set.
+  UV_NO_SYNC: "1"
+  JAX_PLATFORMS: cpu
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-        with: {python-version: "3.11"}
-      # `uv run` would sync the whole root project (jax[cuda13], every
-      # simulator) before running anything -- installing ruff standalone
-      # avoids that entirely.
-      - run: uv pip install --python 3.11 --system ruff==0.16.3
-      - run: ruff check .
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      # uvx runs ruff from its own isolated environment: no Python install needed.
+      - run: uvx ruff@0.16.3 check .
 
   cpu-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with: {python-version: "3.11"}
+      - run: uv venv --python 3.11 .venv
+      - run: uv pip install --python .venv/bin/python --no-deps -e .
       # jax==0.10.0 is pinned (matches uv.lock): a couple of the vmap-vs-per-slot
-      # equality tests compare at atol=1e-5, tight enough that jaxlib 0.10.2's
-      # CPU kernels round differently and fail spuriously -- see uv.lock for
-      # the version this repo actually develops against.
-      - run: uv pip install --python 3.11 --system -e "src/barl_jax[mujoco]" "jax==0.10.0" imageio pytest pytest-xdist
-      - run: JAX_PLATFORMS=cpu MUJOCO_GL=egl pytest tests/ -q
+      # equality tests compare at atol=1e-5, tight enough that newer jaxlib CPU
+      # kernels round differently and fail spuriously.
+      - run: >-
+          uv pip install --python .venv/bin/python
+          "jax==0.10.0" numpy flax optax orbax-checkpoint "gymnasium[classic-control]"
+          mujoco imageio pyyaml rich pytest pytest-xdist
+      # No test renders, so MuJoCo's GL backend is switched off: with
+      # MUJOCO_GL=egl `import mujoco` needs libEGL, which the runner image lacks
+      # and cannot install (its apt mirrors are unreachable).
+      # One pytest process per test file, two workers each: a worker's memory
+      # grows with every compiled model (several GB over the whole suite), and
+      # four long-lived workers exhaust the runner. Every file runs even after
+      # a failure, so one run reports them all.
+      - name: Run tests
+        run: |
+          status=0
+          for file in tests/test_*.py; do
+            echo "::group::$file"
+            MUJOCO_GL=disabled .venv/bin/python -m pytest "$file" -q -n 2 || status=1
+            echo "::endgroup::"
+          done
+          exit $status
 
   wheel-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with: {python-version: "3.11"}
       - run: uv build --wheel --out-dir /tmp/barl-dist
-      - run: uv venv /tmp/barl-wheel
-      - run: uv pip install --python /tmp/barl-wheel/bin/python /tmp/barl-dist/*.whl
+      - run: uv venv --python 3.11 /tmp/barl-wheel
+      - run: uv pip install --python /tmp/barl-wheel/bin/python --no-deps /tmp/barl-dist/*.whl
+      - run: uv pip install --python /tmp/barl-wheel/bin/python "jax==0.10.0" numpy flax optax gymnasium pyyaml
       - run: cd /tmp && /tmp/barl-wheel/bin/python -c "from barl_jax.policy import Policy; assert Policy.available()"
 
   cpu-example:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with: {python-version: "3.11"}
-      # examples/cpu_quickstart.py only needs the standalone library plus
-      # base gymnasium (Pendulum-v1 is classic_control -- ships in gymnasium
-      # itself, no mujoco/box2d extra) -- the whole point being that this
-      # runs with none of the root workspace's CUDA/simulator dependencies.
-      - run: uv pip install --python 3.11 --system -e src/barl_jax
-      - run: timeout 120 python3 -m examples.cpu_quickstart
+      # examples/cpu_quickstart.py needs no simulator beyond gymnasium's own
+      # classic-control Pendulum-v1, no CUDA and no W&B account.
+      - run: uv venv --python 3.11 .venv
+      - run: uv pip install --python .venv/bin/python --no-deps -e .
+      - run: >-
+          uv pip install --python .venv/bin/python
+          "jax==0.10.0" numpy flax optax orbax-checkpoint "gymnasium[classic-control]"
+          imageio pyyaml rich
+      - run: BARL_ALLOW_CPU=1 timeout 300 .venv/bin/python -m examples.cpu_quickstart

@@ -31,7 +31,6 @@ class StochasticActorConfig(ActorOptimConfig):
 @register_component
 class StochasticActor(ActorOptim, Actor):
 
-  kind = "actor"
   config_type = StochasticActorConfig
 
   def __init__(self, env_stats, config: StochasticActorConfig, *, rngs: nnx.Rngs, **kwargs):
