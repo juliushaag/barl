@@ -214,6 +214,29 @@ def test_grid_materialization_freezes_overrides(tmp_path):
     assert from_yaml(tmp_path / runs[0].config).model == "SAC"
 
 
+def _save_small_policy(algo, path):
+    """A narrow, untrained `algo` checkpoint for HalfCheetah. These tests
+    exercise the submit -> executor -> evaluate.py pipeline, not the model, and
+    a default-width critic makes every one of an episode's 1000 steps slow on
+    CPU."""
+    from barl_jax.checkpoints import save_policy
+    from barl_jax.config.schemas import model_schema
+    from barl_jax.env import Environment
+    from barl_jax.policy import Policy
+
+    small = {"critic": {"latent_dim": 16}}
+    if algo != "NCLQL":                 # NCLQL's Langevin actor has no network
+        small["actor"] = {"latent_dim": 16}
+    model = model_schema(algo)().overridden({"components": small})
+    env_obj = Environment.class_for("HalfCheetah")()
+    env = env_obj.get_env()
+    try:
+        policy = Policy.make(algo, env, model, env_stats=env_obj.get_env_stats(env), seed=0)
+        save_policy(policy, path)
+    finally:
+        env.close()
+
+
 def test_submit_eval_end_to_end_through_local_executor(tmp_path):
     """--from-sweep, all the way through: a real checkpoint on disk, a real
     LocalExecutor subprocess (scripts/evaluate.py, which a monkeypatched
@@ -223,20 +246,10 @@ def test_submit_eval_end_to_end_through_local_executor(tmp_path):
     is for -- every combo evaluated on the same node."""
     import json
 
-    from barl_jax.checkpoints import save_policy
-    from barl_jax.env import Environment
-    from barl_jax.policy import Policy
-
     trained = tmp_path / "trained"
     for algo in ("SAC", "NCLQL"):
         tag = f"{algo}_HalfCheetah_1seeds"
-        env_obj = Environment.class_for("HalfCheetah")()
-        env = env_obj.get_env()
-        try:
-            policy = Policy.make(algo, env, env_stats=env_obj.get_env_stats(env), seed=0)
-            save_policy(policy, trained / tag / "checkpoints" / "seed0" / "best")
-        finally:
-            env.close()
+        _save_small_policy(algo, trained / tag / "checkpoints" / "seed0" / "best")
         (trained / tag / "config.yaml").write_text(
             f"runs: [{{model: {algo}, env: HalfCheetah, seed: 0}}]\n")
 
@@ -246,7 +259,8 @@ def test_submit_eval_end_to_end_through_local_executor(tmp_path):
     args = module.parse_args([
       "--algos", "SAC", "NCLQL", "--envs", "HalfCheetah", "--seeds", "1",
       "--from-sweep", str(trained), "--executor", "local",
-      "--episodes", "2", "--num-candidates", "1", "--sweep-dir", str(sweep_dir),
+      "--episodes", "1", "--num-envs", "1", "--num-candidates", "1",
+      "--sweep-dir", str(sweep_dir),
     ])
     module.submit_eval(args)
 
@@ -268,26 +282,15 @@ def test_submit_eval_config_end_to_end_through_local_executor(tmp_path):
     import json
     import math
 
-    from barl_jax.checkpoints import save_policy
-    from barl_jax.env import Environment
-    from barl_jax.policy import Policy
-
     checkpoints = {}
     for name, algo in [("agent-a", "SAC"), ("agent-b", "NCLQL")]:
-        env_obj = Environment.class_for("HalfCheetah")()
-        env = env_obj.get_env()
-        try:
-            policy = Policy.make(algo, env, env_stats=env_obj.get_env_stats(env), seed=0)
-            path = tmp_path / "somewhere" / name / "best"
-            save_policy(policy, path)
-            checkpoints[name] = path
-        finally:
-            env.close()
+        checkpoints[name] = tmp_path / "somewhere" / name / "best"
+        _save_small_policy(algo, checkpoints[name])
 
     import yaml
     eval_config = tmp_path / "eval.yaml"
     eval_config.write_text(yaml.safe_dump({
-      "defaults": {"episodes": 2, "num_candidates": 1},
+      "defaults": {"episodes": 1, "num_envs": 1, "num_candidates": 1},
       "runs": [{"path": str(p), "env": "HalfCheetah"} for p in checkpoints.values()],
     }))
 
