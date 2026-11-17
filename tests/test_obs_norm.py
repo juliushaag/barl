@@ -33,7 +33,9 @@ def test_running_moments_pool_unequal_batches_exactly():
   assert float(norm.count[...]) == 50
   z = norm(x)
   np.testing.assert_allclose(z.mean(0), 0.0, atol=1e-3)
-  np.testing.assert_allclose(z.std(0), 1.0, rtol=1e-3)
+  # Unit std up to the variance floor `EPS`, which only matters for small features.
+  expected_std = jnp.sqrt(x.var(0) / (x.var(0) + RunningObsNorm.EPS))
+  np.testing.assert_allclose(z.std(0), expected_std, rtol=1e-3)
   assert float(jnp.abs(norm(jnp.full((1, 3), 1e6))).max()) == RunningObsNorm.CLIP
 
 
