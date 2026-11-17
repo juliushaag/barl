@@ -357,8 +357,9 @@ def test_floq_distill_value_is_a_single_q_net_pass_and_needs_no_integration():
     raise AssertionError("distilled value must not integrate the flow")
 
   critic._integrate = boom
+  state = critic.normalize_obs(data["obs"])          # what every network of the critic sees
   np.testing.assert_allclose(critic.value(data["obs"], data["act"]),
-                             critic.reduce_value(critic.q_net(data["obs"], data["act"])))
+                             critic.reduce_value(critic.q_net(state, data["act"])))
 
 
 def test_floq_distill_target_is_stop_gradient_and_matches_flow_returns():
@@ -386,8 +387,11 @@ def test_floq_distill_target_is_stop_gradient_and_matches_flow_returns():
   _, _, _, distill_key = jax.random.split(key, 4)
   starts = jax.random.uniform(distill_key, (BATCH, 3, 1), minval=critic.noise_min,
                               maxval=critic.noise_max)
-  flow_return = critic._integrate(critic.net, data["obs"], data["act"], starts).mean(axis=(0, 2))
-  expected = ((critic.q_net(data["obs"], data["act"]) - flow_return[None]) ** 2).mean()
+  # The networks see normalized observations; repeating the same batch leaves the
+  # running statistics, and so this normalization, unchanged.
+  state = critic.normalize_obs(data["obs"])
+  flow_return = critic._integrate(critic.net, state, data["act"], starts).mean(axis=(0, 2))
+  expected = ((critic.q_net(state, data["act"]) - flow_return[None]) ** 2).mean()
   full = critic.td_loss(*args, key=key)["critic"]
   flow_loss = _critic(seed=5, flow_steps=2, noise_samples=3, distill=False).td_loss(
     *args, key=key)["critic"]

@@ -18,6 +18,21 @@ distillation target is stopped-gradient. With `distill=false`, the actor
 differentiates through the integrated live flow, using deterministic midpoint
 quadrature for its source returns.
 
+## Observation normalization
+
+`obs_norm: true` (the default here) normalizes each observation feature with
+running statistics before any of the critic's networks sees it: the live and
+target fields and the distilled Q-network. The statistics are pooled from every
+training batch and never use the current batch, so `(s, a)` and `(s', a')` are
+mapped identically. Normalized values are clipped to ±10.
+
+Without it the critic does not learn on DMC Dog or Humanoid. Their raw
+observations reach |x| ≈ 1000, with 8–13 features of std 10–60. Those features
+dominate the first layer of a LayerNorm trunk, Q goes flat in the action, and
+the actor gets no gradient. (C51 and HL-Gauss avoid this because their CrossQ
+trunk batch-normalizes its input.) Checkpoints written before this setting
+existed load with it off and compute exactly as before.
+
 ## Source-noise scale
 
 The initial interval is `noise_coverage * [v_min, v_max]`, with coverage 0.1.

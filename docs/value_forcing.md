@@ -62,9 +62,25 @@ loss   = (v(z_in | s, a, tau) - target)^2
 | `target` | `Polyak`, `tau: 0.005` | the bootstrap flow (paper: 0.005) |
 | `ensemble` | 2 members, `mean` / `mean` | see below |
 | `mlp` | GELU MLP with LayerNorm, 512 × 3 | the paper uses 1024 × 4 |
+| `obs_norm` | `true` | per-feature running normalization of observations; see below |
 
 `value()` converts back from normalised units, so actors, entropy terms and
 logged Q-values are ordinary reward-scaled returns.
+
+## Observation normalization
+
+`obs_norm: true` (the default here) normalizes each observation feature with
+running statistics before any of the critic's networks sees it: the live and
+target velocity fields. The statistics are pooled from every
+training batch and never use the current batch, so `(s, a)` and `(s', a')` are
+mapped identically. Normalized values are clipped to ±10.
+
+Without it the critic does not learn on DMC Dog or Humanoid. Their raw
+observations reach |x| ≈ 1000, with 8–13 features of std 10–60. Those features
+dominate the first layer of a LayerNorm trunk, Q goes flat in the action, and
+the actor gets no gradient. (C51 and HL-Gauss avoid this because their CrossQ
+trunk batch-normalizes its input.) Checkpoints written before this setting
+existed load with it off and compute exactly as before.
 
 ## Differences from the paper
 

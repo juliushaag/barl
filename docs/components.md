@@ -71,6 +71,16 @@ A part that trains parameters of its own declares its optimizer keys
 with parameter ownership and the `after_step` hooks, automatically. These losses
 are logged as `critic/loss/support` and `critic/loss/support_dual`.
 
+## Observation normalization
+
+`obs_norm: true` on any critic normalizes each observation feature with running
+statistics, shared by all of the critic's networks (state under
+`critic.obs_norm`). Use it with any trunk that has no per-feature input
+normalization of its own: floq and Value Forcing turn it on by default, and
+LayerNorm `DirectCritic` or SimBa-trunk critics need it on high-dimensional
+DMC tasks. The default CrossQ trunk of C51 and HL-Gauss normalizes its input
+itself.
+
 ## Constraints
 
 `constraints` is a field of every trainable component's config. Each one projects
