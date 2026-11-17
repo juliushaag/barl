@@ -11,13 +11,17 @@ resume checkpoints alike -- an optimizer's moments sit under the same
 To change a saved layout: bump `POLICY_VERSION` / `TRAINING_VERSION`, append a
 `StateMigration` for the old version, and add a fixture under
 `tests/fixtures/policy_v<old>/` written by the old code.
+
+A new default that would change what an *old* checkpoint computes is pinned by
+a `SavedModelUpgrade`: it rewrites the model spec saved in the checkpoint, for
+checkpoints written at or before its version, before the spec is built.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
 
-POLICY_VERSION = 4
-TRAINING_VERSION = 4
+POLICY_VERSION = 5
+TRAINING_VERSION = 5
 
 Renames = tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
 
@@ -47,7 +51,50 @@ MIGRATIONS = (
       (("noise", "sigmas"), ("objective", "sigmas")),
     ),
   ),
+  StateMigration(
+    version=4,
+    description="FloqCritic and ValueForcingCritic gained running observation "
+                "normalization (`obs_norm`, default on). Checkpoints written before keep "
+                "it off (see SAVED_MODEL_UPGRADES), so their state layout is unchanged.",
+    slot="critic",
+    renames=(),
+  ),
 )
+
+
+@dataclass(frozen=True)
+class SavedModelUpgrade:
+  version: int        # applies to checkpoints written at this version or earlier
+  description: str
+  upgrade: object     # (model mapping) -> model mapping
+
+
+def _flow_critics_keep_obs_norm_off(model: dict) -> dict:
+  critic = (model.get("components") or {}).get("critic")
+  if (isinstance(critic, dict) and "obs_norm" not in critic
+      and critic.get("class", critic.get("class_name")) in ("FloqCritic", "ValueForcingCritic")):
+    model = {**model, "components": {**model["components"],
+                                     "critic": {**critic, "obs_norm": False}}}
+  return model
+
+
+SAVED_MODEL_UPGRADES = (
+  SavedModelUpgrade(
+    version=4,
+    description="FloqCritic / ValueForcingCritic: `obs_norm` now defaults to on; a "
+                "checkpoint trained without it keeps it off.",
+    upgrade=_flow_critics_keep_obs_norm_off,
+  ),
+)
+
+
+def upgrade_saved_model(model: dict, version: int) -> dict:
+  """The model spec saved in a checkpoint of `version`, with every default that
+  changed since pinned to what that checkpoint was trained with."""
+  for rule in SAVED_MODEL_UPGRADES:
+    if version <= rule.version:
+      model = rule.upgrade(model)
+  return model
 
 OLDEST_POLICY_VERSION = min([m.version for m in MIGRATIONS] + [POLICY_VERSION])
 OLDEST_TRAINING_VERSION = min([m.version for m in MIGRATIONS] + [TRAINING_VERSION])

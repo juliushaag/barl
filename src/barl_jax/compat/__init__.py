@@ -23,8 +23,9 @@ from barl_jax.compat.checkpoint import (
   check_version,
   policy_class_for,
   restore_state,
+  upgrade_saved_model,
 )
 from barl_jax.compat.config import upgrade_component
 
 __all__ = ["POLICY_VERSION", "TRAINING_VERSION", "check_version", "policy_class_for",
-           "restore_state", "upgrade_component"]
+           "restore_state", "upgrade_component", "upgrade_saved_model"]

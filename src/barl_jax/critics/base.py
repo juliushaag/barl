@@ -25,7 +25,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from barl_jax.components import Critic
+from barl_jax.components import Buffer, Critic
 from barl_jax.critics.mlps import crossq_mlp
 from barl_jax.networks.base import NetworkConfig
 from barl_jax.networks.constraints import apply_constraints
@@ -68,6 +68,43 @@ class QCriticConfig(CriticOptimConfig):
   target: TargetConfig = field(default_factory=NoTargetConfig)
   ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
   objective: ObjectiveConfig = field(default_factory=TDConfig)
+  # Per-feature running normalization of the observations every network of the
+  # critic sees (live, target, distilled), from the training batches. Needed by
+  # trunks without their own per-feature input normalization: raw DMC Dog
+  # observations reach |x| ~ 1e3 and drown out the action. The default
+  # `crossq_mlp` normalizes its input itself, so it stays off here.
+  obs_norm: bool = False
+
+
+class RunningObsNorm(nnx.Module):
+  """Per-feature running mean and variance of the observations, merged from
+  each training batch (exact pooled moments, like the policy's own
+  `normalize_obs`). Normalizes with the statistics alone -- never the batch's --
+  so `(s, a)` and `(s', a')` are mapped identically, and clips to
+  +-`CLIP` standard deviations. Identity until the first batch arrives."""
+
+  CLIP = 10.0
+  EPS = 1.0e-4
+
+  def __init__(self, obs_dim: int):
+    self.mean = Buffer(jnp.zeros((obs_dim,), jnp.float32))
+    self.var = Buffer(jnp.ones((obs_dim,), jnp.float32))
+    self.count = Buffer(jnp.zeros((), jnp.float32))
+
+  def update(self, obs):
+    obs = jax.lax.stop_gradient(obs.astype(jnp.float32))
+    count = jnp.asarray(obs.shape[0], jnp.float32)
+    total = self.count[...] + count
+    delta = obs.mean(axis=0) - self.mean[...]
+    pooled = (self.var[...] * self.count[...] + obs.var(axis=0) * count
+              + delta ** 2 * self.count[...] * count / total)
+    self.mean[...] = self.mean[...] + delta * count / total
+    self.var[...] = jnp.maximum(pooled / total, 0.0)
+    self.count[...] = total
+
+  def __call__(self, obs):
+    scaled = (obs - self.mean[...]) / jnp.sqrt(self.var[...] + self.EPS)
+    return jnp.clip(scaled, -self.CLIP, self.CLIP).astype(obs.dtype)
 
 
 def _batch_stats_need_joint_forward(config):
@@ -138,6 +175,7 @@ class QCritic(Critic):
     if problems:
       raise ValueError(f"{type(self).__name__}: " + "; ".join(problems))
 
+    self.obs_norm = RunningObsNorm(env_stats["obs_dim"]) if config.obs_norm else None
     self.head = config.head.build(env_stats, config.reward_scale, gamma=config.gamma)
     self.objective = config.objective.build(env_stats)
     self.net = self.build_network(env_stats, config, rngs=rngs)
@@ -209,8 +247,18 @@ class QCritic(Critic):
   def _level(self, s, level):
     return self.objective.level(s, level)
 
+  def normalize_obs(self, obs):
+    """`obs` as every network of this critic sees it."""
+    return obs if self.obs_norm is None else self.obs_norm(obs)
+
+  def observe(self, obs) -> None:
+    """Fold a training batch's observations into the running statistics. Called
+    once per step, at the top of `td_loss`, before any forward."""
+    if self.obs_norm is not None:
+      self.obs_norm.update(obs)
+
   def raw(self, s, a, level=None):
-    return self.net(s, a, self._level(s, level))
+    return self.net(self.normalize_obs(s), a, self._level(s, level))
 
   def value(self, s, a, level=None):
     return self.reduce_value(self.raw(s, a, level))
@@ -253,9 +301,11 @@ class QCritic(Critic):
     (B,) executed plan length; entropy_bonus: (B, 1) or 0.0, added to the
     bootstrap before discounting. policy_samples: `(curr, curr_logp, next,
     next_logp)` when the objective asks for them (`self.policy_samples`)."""
-    items = [(obs, action, self._level(obs, None))]
-    items += self.objective.extra_items(obs, action, key)
-    next_item = (next_obs, next_action, self._level(next_obs, None))
+    self.observe(obs)
+    state, next_state = self.normalize_obs(obs), self.normalize_obs(next_obs)
+    items = [(state, action, self._level(obs, None))]
+    items += self.objective.extra_items(state, action, key)
+    next_item = (next_state, next_action, self._level(next_obs, None))
 
     preds, next_raw = self.target.forward(self.net, items, next_item,
                                           batch_stats=self.config.mlp.norm in BATCH_STAT_NORMS)

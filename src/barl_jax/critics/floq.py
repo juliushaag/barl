@@ -85,6 +85,8 @@ class FloqCriticConfig(QCriticConfig):
     norm_after_act=True, dtype="float32"))
   ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
   target: TargetConfig = field(default_factory=lambda: PolyakConfig(joint_forward=False))
+  # Its LayerNorm trunk has no per-feature input normalization of its own.
+  obs_norm: bool = True
   flow_steps: int = 8
   noise_samples: int = 8
   value_samples: int = 8
@@ -217,14 +219,21 @@ class FloqCritic(QCritic):
     return jnp.broadcast_to(points[None, :, None], (obs.shape[0], samples, 1))
 
   def raw(self, s, a, level=None):
+    return self._raw(self.normalize_obs(s), a)
+
+  def _raw(self, state, a):
+    """Q per member from an already normalized state, `(N, B, 1)`."""
     if self.config.distill:
-      return self.q_net(s, a)
-    return self._integrate(self.net, s, a, self._starts(s, self.config.value_samples)).mean(axis=2)
+      return self.q_net(state, a)
+    return self._integrate(self.net, state, a,
+                           self._starts(state, self.config.value_samples)).mean(axis=2)
 
   def td_loss(self, obs, action, next_obs, next_action, chunk_return, terminated, horizon,
               entropy_bonus=0.0, *, key=None) -> dict:
     key = self.rngs.noise() if key is None else key
     target_key, start_key, time_key, distill_key = jax.random.split(key, 4)
+    self.observe(obs)
+    obs, next_obs = self.normalize_obs(obs), self.normalize_obs(next_obs)
     samples = self.config.noise_samples
     uniform = lambda k, n: jax.random.uniform(k, (n, samples, 1), minval=self.noise_min,
                                               maxval=self.noise_max)
@@ -254,7 +263,7 @@ class FloqCritic(QCritic):
       self.metrics.scalar("distill_loss", distill_loss)
       losses["critic"] = flow_loss + distill_loss
     else:
-      current = self.raw(obs, action)
+      current = self._raw(obs, action)
     self.record(current, target)
     self.metrics.scalar("flow_loss", flow_loss)
     self.metrics.scalar("td_error", ((current.mean(axis=0) - target) ** 2).mean())
