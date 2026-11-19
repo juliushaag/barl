@@ -30,6 +30,7 @@ from barl_jax.critics.mlps import crossq_mlp
 from barl_jax.networks.base import NetworkConfig
 from barl_jax.networks.constraints import apply_constraints
 from barl_jax.networks.ensemble import Ensemble
+from barl_jax.networks.input_norm import InputNormConfig, RSNormConfig
 from barl_jax.optimization import CriticOptimConfig
 from barl_jax.registration import register_component
 
@@ -68,6 +69,9 @@ class QCriticConfig(CriticOptimConfig):
   target: TargetConfig = field(default_factory=NoTargetConfig)
   ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
   objective: ObjectiveConfig = field(default_factory=TDConfig)
+  # Per-feature normalization of observations, applied first by every network
+  # of the critic (live, target and distilled copies alike).
+  input_norm: InputNormConfig = field(default_factory=RSNormConfig)
 
 
 def _batch_stats_need_joint_forward(config):
@@ -210,7 +214,7 @@ class QCritic(Critic):
     return self.objective.level(s, level)
 
   def raw(self, s, a, level=None):
-    return self.net(s, a, self._level(s, level))
+    return self.net(self.normalize_input(s), a, self._level(s, level))
 
   def value(self, s, a, level=None):
     return self.reduce_value(self.raw(s, a, level))
@@ -253,9 +257,10 @@ class QCritic(Critic):
     (B,) executed plan length; entropy_bonus: (B, 1) or 0.0, added to the
     bootstrap before discounting. policy_samples: `(curr, curr_logp, next,
     next_logp)` when the objective asks for them (`self.policy_samples`)."""
-    items = [(obs, action, self._level(obs, None))]
-    items += self.objective.extra_items(obs, action, key)
-    next_item = (next_obs, next_action, self._level(next_obs, None))
+    state, next_state = self.normalize_input(obs), self.normalize_input(next_obs)
+    items = [(state, action, self._level(obs, None))]
+    items += self.objective.extra_items(state, action, key)
+    next_item = (next_state, next_action, self._level(next_obs, None))
 
     preds, next_raw = self.target.forward(self.net, items, next_item,
                                           batch_stats=self.config.mlp.norm in BATCH_STAT_NORMS)

@@ -41,7 +41,7 @@ class DeterministicActor(ActorOptim, Actor):
                                 rngs=rngs)
 
   def mean(self, s):
-    return jnp.tanh(self.net((s,)).astype(jnp.float32))
+    return jnp.tanh(self.net((self.normalize_input(s),)).astype(jnp.float32))
 
   def noisy(self, s, key, std, clip=None):
     mean = self.mean(s)

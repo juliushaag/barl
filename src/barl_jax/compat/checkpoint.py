@@ -1,7 +1,7 @@
 """Checkpoint format versions and the state migrations between them.
 
 A migration upgrades a checkpoint written at `version` to `version + 1` by
-renaming parameter paths inside one component slot. Loading never rewrites the
+renaming state paths, inside one component slot or from the policy root. Loading never rewrites the
 files: the current state tree is mapped back to the saved layout (renames
 inverted, newest first), orbax restores into that template, and the values land
 in the current tree. One rename list therefore serves policy checkpoints and
@@ -16,8 +16,8 @@ To change a saved layout: bump `POLICY_VERSION` / `TRAINING_VERSION`, append a
 from dataclasses import dataclass
 from pathlib import Path
 
-POLICY_VERSION = 4
-TRAINING_VERSION = 4
+POLICY_VERSION = 5
+TRAINING_VERSION = 5
 
 Renames = tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
 
@@ -26,8 +26,10 @@ Renames = tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
 class StateMigration:
   version: int        # reads a checkpoint written at this version ...
   description: str    # ... and states what changed on the way to version + 1
-  slot: str           # the component slot whose subtree is renamed
-  renames: Renames    # (old subpath, new subpath) under `slot`
+  slot: str | None    # the component slot whose subtree is renamed (None: the policy root)
+  # (old subpath, new subpath) under `slot`. Several new paths may name the same
+  # old one: each is restored from it.
+  renames: Renames
 
 
 MIGRATIONS = (
@@ -47,6 +49,17 @@ MIGRATIONS = (
       (("noise", "sigmas"), ("objective", "sigmas")),
     ),
   ),
+  StateMigration(
+    version=4,
+    description="Observation normalization moved from the Policy into an `input_norm` part "
+                "of every actor and critic; each starts from the statistics the Policy kept "
+                "(see `compat.config.upgrade_model` for the matching config).",
+    slot=None,
+    renames=tuple(
+      ((f"obs_{stat}",), (slot, "input_norm", stat))
+      for slot in ("actor", "critic") for stat in ("mean", "std", "count")
+    ),
+  ),
 )
 
 OLDEST_POLICY_VERSION = min([m.version for m in MIGRATIONS] + [POLICY_VERSION])
@@ -63,18 +76,18 @@ def check_version(version, *, kind: str = "policy") -> int:
   return version
 
 
-def _rename(path: tuple, slot: str, renames, *, inverse: bool) -> tuple:
-  """`path` with the first matching subpath under `slot` renamed. Longest
-  match first, so a nested rename wins over its parent's."""
-  pairs = [(new, old) if inverse else (old, new) for old, new in renames]
+def _rename(path: tuple, slot: str | None, renames, *, inverse: bool) -> tuple:
+  """`path` with its first matching subpath renamed (under `slot`, when given).
+  Longest match first, so a nested rename wins over its parent's. Matches may
+  start anywhere: a resume checkpoint nests the policy under its own prefix."""
+  prefix = (slot,) if slot is not None else ()
+  pairs = [(prefix + new, prefix + old) if inverse else (prefix + old, prefix + new)
+           for old, new in renames]
   pairs.sort(key=lambda pair: -len(pair[0]))
-  for i, segment in enumerate(path):
-    if segment != slot:
-      continue
-    rest = path[i + 1:]
+  for i in range(len(path)):
     for src, dst in pairs:
-      if rest[:len(src)] == src:
-        return path[:i + 1] + dst + rest[len(src):]
+      if path[i:i + len(src)] == src:
+        return path[:i] + dst + path[i + len(src):]
   return path
 
 

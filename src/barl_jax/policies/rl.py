@@ -36,7 +36,6 @@ from barl_jax.registration import register_policy
 class PolicyConfig:
   """Params every off-policy actor-critic policy owns."""
 
-  normalize_obs: bool = False
   policy_delay: int = 1
   random_steps: int = 5000
   batch_size: int = 256
@@ -127,8 +126,9 @@ class RLPolicy(Policy):
   # ---------------------------------------------------------------------
 
   def train_step(self, batch):
-    obs          = self.normalize_observations(batch["obs"])
-    next_obs     = self.normalize_observations(batch["next_obs"])
+    # Raw observations: each actor and critic normalizes its own input.
+    obs          = batch["obs"]
+    next_obs     = batch["next_obs"]
 
     action       = batch["act"]
     chunk_return = batch["chunk_return"]
@@ -184,8 +184,7 @@ class RLPolicy(Policy):
     return (*draw(obs, curr_key), *draw(next_obs, next_key))
 
   def inference_step(self, observation, step_info=None, key=None):
-    obs = self.normalize_observations(observation)
-    return self.actor.sample(obs, critic=self.critic, key=key), {}
+    return self.actor.sample(observation, critic=self.critic, key=key), {}
 
   # ---- Best-of-N scoring (barl_jax.executors) --------------------------
 
@@ -196,8 +195,7 @@ class RLPolicy(Policy):
   def score(self, observation, action):
     """`critic.value()` at the online critic, reduced per
     `ensemble.value_reduce`."""
-    obs = self.normalize_observations(observation)
-    return self.critic.value(obs, action)
+    return self.critic.value(observation, action)
 
 
 @register_policy

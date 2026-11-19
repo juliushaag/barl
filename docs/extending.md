@@ -52,6 +52,21 @@ saved configs naming keys this version no longer has (for example the removed
 action-chunking params `chunk_size` and `alpha_granularity`) still load: the keys
 are dropped with a warning. A checkpoint trained with `chunk_size > 1` cannot be loaded.
 
-Observation normalization is off by default. With `model.params.normalize_obs=true`,
-running moments are updated from each training batch before the objective runs;
-inference reads those moments without updating them.
+Every actor and critic normalizes its own observations through its `input_norm`
+part, `RSNorm` (running per-feature mean and std, SimBa-style) by default. The
+Policy hands each component the training batch's observations before the losses
+run (`Policy.update_observation_stats` -> `component.observe`); inference only
+reads the statistics. Its options are `eps` (variance floor) and `clip`
+(normalized values are clipped to `+-clip`, default 10, `null` disables it):
+
+```bash
+--set model.components.critic.input_norm.clip=5
+```
+
+A per-sample norm (LayerNorm/RMSNorm) is not a substitute: it rescales a whole
+observation by one number, so a feature of std 60 still drowns out the action.
+`Identity` exists only so checkpoints trained without normalization (format <= 4,
+`params.normalize_obs: false`) load as they were trained; a new run with it is
+rejected at preflight. A new actor or critic gets the part by inheriting
+`ActorOptimConfig` / `QCriticConfig` and calls `self.normalize_input(obs)` before
+its first network.

@@ -83,7 +83,7 @@ class DDPMActor(ActorOptim, Actor):
     return (x_t - sigma * eps) / alpha
 
   def predict_eps(self, obs, x, t):
-    return self.field(obs, x, t).astype(jnp.float32)
+    return self.field(self.normalize_input(obs), x, t).astype(jnp.float32)
 
   # ---- the reverse chain ---------------------------------------------------
   def reverse_step(self, obs, x, n, key):

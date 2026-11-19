@@ -96,7 +96,9 @@ def test_optimizer_state_restores_through_the_renames(tmp_path):
     if jnp.issubdtype(value.dtype, jnp.floating):
       key, sub = jax.random.split(key)
       value = value + jax.random.normal(sub, value.shape, value.dtype)
-    old[saved_path(path, 3) + ("value",)] = value
+    # Several current paths may come from one saved path (the policy's old
+    # observation statistics seed every actor's and critic's `input_norm`).
+    value = old.setdefault(saved_path(path, 3) + ("value",), value)
     expected[path] = value
   assert any(p[0] == "1" and "support_net" in p for p in old), \
     "no optimizer moment sits under a renamed path"
@@ -163,3 +165,47 @@ def test_old_overrides_build_the_same_model_as_new_ones(old, new):
     "model": model, "env": "HalfCheetah",
     "model_overrides": {"components": {"critic": critic}}}).model_config
   assert build(old) == build(new)
+
+
+@pytest.mark.parametrize("normalize_obs", [True, False])
+def test_v4_policy_level_observation_statistics_move_into_input_norm(tmp_path, normalize_obs):
+  """Format 4 kept one set of observation statistics on the Policy, used only
+  with `params.normalize_obs`. Write such a checkpoint by hand: with the switch
+  on, every actor and critic must start from those statistics, under the same
+  mapping; with it off, they must see the raw observations, as trained."""
+  import json
+  policy = make("SAC")
+  save_policy(policy, tmp_path / "policy")
+  meta = json.loads((tmp_path / "policy" / "meta.json").read_text())
+  meta["format_version"] = 4
+  model = meta["spec"]["model"]
+  model["params"]["normalize_obs"] = normalize_obs
+  for slot in ("actor", "critic"):
+    model["components"][slot].pop("input_norm")
+  (tmp_path / "policy" / "meta.json").write_text(json.dumps(meta))
+
+  dim = policy.actor.obs_dim
+  stats = {"obs_mean": jnp.linspace(-3.0, 3.0, dim), "obs_std": jnp.linspace(0.5, 40.0, dim),
+           "obs_count": jnp.asarray(17.0)}
+  old = {(name, "value"): value for name, value in stats.items()}
+  for path, variable in nnx.to_flat_state(nnx.state(policy)):
+    if "input_norm" not in path:
+      old[tuple(str(p) for p in path) + ("value",)] = variable[...]
+  with ocp.PyTreeCheckpointer() as ckpt:
+    ckpt.save(tmp_path / "old" / "state", nnx.traversals.unflatten_mapping(old))
+  (tmp_path / "old" / "meta.json").write_text(json.dumps(meta))
+
+  restored = load_policy(tmp_path / "old", FakeEnv(), make_env_stats())
+  obs = batch()["obs"]
+  for component in (restored.actor, restored.critic):
+    norm = component.input_norm
+    if not normalize_obs:
+      assert type(norm).__name__ == "IdentityInputNorm"
+      np.testing.assert_array_equal(component.normalize_input(obs), obs)
+      continue
+    np.testing.assert_array_equal(norm.mean[...], stats["obs_mean"])
+    np.testing.assert_array_equal(norm.std[...], stats["obs_std"])
+    assert float(norm.count[...]) == 17.0
+    # The format-4 mapping: (obs - mean) / max(std, 1e-6), unclipped.
+    want = (obs - stats["obs_mean"]) / jnp.maximum(stats["obs_std"], 1e-6)
+    np.testing.assert_allclose(component.normalize_input(obs), want, rtol=1e-6)

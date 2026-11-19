@@ -12,6 +12,7 @@ from flax import nnx
 from barl_jax.components import TRAINABLE
 from barl_jax.metrics import DEBUG, PRIMARY, DebugMetric, Metric, armed, collect, recording
 from barl_jax.networks.constraints import ConstraintConfig
+from barl_jax.networks.input_norm import InputNormConfig, RSNormConfig
 
 
 class OptimizerMixin:
@@ -269,7 +270,9 @@ class CriticOptimConfig(OptimizerConfig):
 
 @dataclass(frozen=True)
 class ActorOptimConfig(OptimizerConfig):
-  pass
+  """A trainable actor: its optimizer, plus the per-feature normalization its
+  networks apply to observations first."""
+  input_norm: InputNormConfig = field(default_factory=RSNormConfig)
 
 
 @dataclass(frozen=True)

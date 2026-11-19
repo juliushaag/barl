@@ -8,7 +8,7 @@ Audience: a Claude instance applying this to another checkout of this repo (`bar
 ## Design decisions (do not change)
 - Run name `seedN/epK`; group `<sweep dir name>/<mode>`; `job_type="inference"`; tags `inference`, env, mode, seedN. Config holds seed (int), mode, episode, env, gamma, alpha, checkpoint_path, sweep, plus the eval entry's other keys.
 - Per-step x-axis `t` (`run.define_metric("t")`, `define_metric("*", step_metric="t")`).
-- `q` is the critic **expectation** (`critic.expectation`: ensemble mean; distribution mean for categorical critics) at the clean noise level on the normalized observation — NOT `Policy.score`/`value` (that applies the pessimistic `value_reduce`).
+- `q` is the critic **expectation** (`critic.expectation`: ensemble mean; distribution mean for categorical critics) at the clean noise level on the raw observation (the critic applies its own `input_norm`) — NOT `Policy.score`/`value` (that applies the pessimistic `value_reduce`).
 - Soft return-to-go matches the critic target `r + gamma*(Q' + alpha*H(s'))` (`critics/base.py: scalar_td_target`): `G_t = sum_k gamma^k r_{t+k} + sum_{k>=1} gamma^k * alpha*H(s_{t+k})`. alpha*H of the state reached after step t is the entropy probed at step t+1; 0 past the last step. alpha is nonzero only for policies with an `entropy` attribute and `params.entropy_in_target`.
 - Probing must not change the action RNG stream: the probe key is `jax.random.fold_in(subkey, 1)` where `subkey` is the key given to `act_on`.
 - Logging failures never lose an evaluation: `InferenceLogger.log_checkpoint` catches per rollout and prints one warning.
@@ -71,7 +71,7 @@ def make_probe_fn(policy):
   """A jitted `(observation, action, key) -> {"q": (B,), "entropy": (B,)?}`
   pinned to the policy's current weights in eval mode, or None if the policy
   has no critic. `q` is the critic's expectation at the clean noise level, on
-  the normalized observation -- independent of `Policy.score`/`supports_bon`,
+  the raw observation (each component applies its own `input_norm`) -- independent of `Policy.score`/`supports_bon`,
   so it exists for every critic-backed policy. `entropy` is present only when
   the actor reports one."""
   if getattr(policy, "critic", None) is None:
@@ -84,9 +84,8 @@ def make_probe_fn(policy):
   # its own members, which rejects nnx state captured from the outer trace.
   @nnx.jit
   def jitted(module, observation, action, key):
-    obs = module.normalize_observations(observation)
-    out = {"q": module.critic.expectation(obs, action)}
-    _, entropy = module.actor.generate_action(obs, critic=module.critic, key=key)
+    out = {"q": module.critic.expectation(observation, action)}
+    _, entropy = module.actor.generate_action(observation, critic=module.critic, key=key)
     if entropy is not None:
       out["entropy"] = entropy
     return out

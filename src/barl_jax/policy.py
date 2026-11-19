@@ -125,10 +125,6 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
 
     self.observation_shape = tuple(observation_space.shape)
 
-    self.obs_std  = Buffer(jnp.ones(observation_space.shape[-1]))
-    self.obs_mean = Buffer(jnp.zeros(observation_space.shape[-1]))
-    self.obs_count = Buffer(jnp.zeros((), jnp.float32))
-
     # Gradient steps taken, for algorithms whose update cadence is `step % k`.
     self.train_steps = Buffer(jnp.zeros((), jnp.int32))
 
@@ -159,10 +155,6 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
   @property
   def params(self):
     return self.config.params
-
-  @property
-  def normalize_obs(self) -> bool:
-    return self.params.normalize_obs
 
   @classmethod
   def config_problems(cls, params) -> list[str]:
@@ -265,26 +257,14 @@ class Policy(OptimizerMixin, nnx.Module, ABC):
       apply_constraints(component)
       component.after_step()
 
-  # Observation normalisation
+  # Observation normalization is each actor's and critic's own business (their
+  # `input_norm` parts); the policy only hands every component the batch.
 
   def update_observation_stats(self, obs):
-    if not self.normalize_obs:
-      return
-    count = jnp.asarray(obs.shape[0], jnp.float32)
-    total = self.obs_count[...] + count
-    mean = jnp.mean(obs, axis=0)
-    variance = jnp.var(obs, axis=0)
-    delta = mean - self.obs_mean[...]
-    combined = (self.obs_std[...] ** 2 * self.obs_count[...] + variance * count
-                + delta ** 2 * self.obs_count[...] * count / total)
-    self.obs_mean[...] += delta * count / total
-    self.obs_std[...] = jnp.sqrt(jnp.maximum(combined / total, 0.0))
-    self.obs_count[...] = total
-
-  def normalize_observations(self, obs):
-    if not self.normalize_obs:
-      return obs
-    return (obs - self.obs_mean[...]) / jnp.maximum(self.obs_std[...], 1e-6)
+    """Once per gradient step, before the losses: every component folds the
+    training batch's observations into its own `input_norm` statistics."""
+    for component in self.components.values():
+      component.observe(obs)
 
   # Action scaling
 
