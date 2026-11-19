@@ -128,7 +128,7 @@ class ScoreContinuousActor(ActorOptim, Actor):
     return const + 0.5 * (X ** 2).sum(axis=-1) / self._terminal_var
 
   def control(self, obs, x, tau):
-    u = self.field(obs, x, self.scaled_time(tau))
+    u = self.field(self.normalize_input(obs), x, self.scaled_time(tau))
     return jnp.clip(u, -self.config.out_clip, self.config.out_clip)
 
   def scaled_time(self, tau):
@@ -224,7 +224,7 @@ class AMDP(MaxEntRLPolicy):
 class AMDPModelConfig(ModelConfig):
   policy_class: str = "AMDP"
   params: MaxEntPolicyConfig = field(default_factory=lambda: MaxEntPolicyConfig(
-    normalize_obs=False, policy_delay=3))
+    policy_delay=3))
   components: ComponentsConfig = field(default_factory=lambda: ComponentsConfig(
     actor=ScoreContinuousActorConfig(), critic=C51CriticConfig(),
     entropy=AutotuneRegulatorConfig()))

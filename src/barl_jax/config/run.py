@@ -143,7 +143,9 @@ class RunConfig:
     if _is_int(random_steps, 0) and _is_int(self.num_envs, 1) and random_steps % self.num_envs:
       problems.append(f"params.random_steps={random_steps!r}: must be divisible by "
                       f"num_envs ({self.num_envs})")
-    return problems + _model_problems(self.model_config)
+    # A model loaded from a checkpoint is kept as it was trained; only a new
+    # model must normalize its inputs.
+    return problems + _model_problems(self.model_config, new_model=not self.checkpoint)
 
   def replace(self, **changes) -> "RunConfig":
     """Dataclass replacement; changing `model` rebuilds that model's defaults."""
@@ -223,7 +225,16 @@ def _run_problems(cfg: Mapping[str, Any]) -> list[str]:
   return problems
 
 
-def _model_problems(model: ModelConfig) -> list[str]:
+def _input_norm_problem(slot: str, component) -> str | None:
+  norm = getattr(component, "input_norm", None)
+  if norm is None or norm.normalizes:
+    return None
+  return (f"components.{slot}.input_norm.class={norm.class_name!r}: a new model must normalize "
+          f"its observations per feature (RSNorm); {norm.class_name} exists only so checkpoints "
+          f"trained without input normalization still load")
+
+
+def _model_problems(model: ModelConfig, *, new_model: bool = True) -> list[str]:
   from barl_jax.policy import Policy
   policy_cls = Policy.class_for(model.policy_class)
   problems = [f"params: {p}" for p in policy_cls.config_problems(model.params)]
@@ -240,6 +251,8 @@ def _model_problems(model: ModelConfig) -> list[str]:
     if problem:
       problems.append(problem)
     problems.extend(f"components.{slot}: {p}" for p in cls.config_problems(component))
+    if new_model and (problem := _input_norm_problem(slot, component)):
+      problems.append(problem)
   return problems
 
 

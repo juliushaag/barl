@@ -131,7 +131,7 @@ class DISActor(ActorOptim, Actor):
     return -x / self.config.prior_std**2
 
   def control_at(self, obs, x, i: int):
-    u = self.field(obs, x, jnp.asarray(i, jnp.float32)).astype(jnp.float32)
+    u = self.field(self.normalize_input(obs), x, jnp.asarray(i, jnp.float32)).astype(jnp.float32)
     return jnp.clip(u, -self.config.out_clip, self.config.out_clip)
 
   def generate_action(self, obs, *, critic: Critic = None, key=None, squash=True):

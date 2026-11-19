@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import subprocess
 import sys
@@ -130,21 +129,54 @@ def test_incompatible_objective_is_rejected_before_building():
     })
 
 
-def test_running_normalization_handles_unequal_batches_and_constant_channels():
-  p = make_policy(tiny_run(model_overrides={"params": {"normalize_obs": True}, "components": {
+def test_every_actor_and_critic_normalizes_its_own_input_with_pooled_statistics():
+  p = make_policy(tiny_run(model_overrides={"components": {
     "actor": {"latent_dim": 8}, "critic": {"latent_dim": 8}}}))
   first = jnp.array([[1., 3., 5.], [3., 3., 7.]])
   second = jnp.array([[5., 3., 9.]])
   p.update_observation_stats(first)
   p.update_observation_stats(second)
   all_obs = np.concatenate([first, second])
-  np.testing.assert_allclose(p.obs_mean[...], all_obs.mean(0))
-  np.testing.assert_allclose(p.obs_std[...], all_obs.std(0), rtol=1e-6)
-  assert np.isfinite(p.normalize_observations(second)).all()
-  p.config = dataclasses.replace(p.config, params=dataclasses.replace(p.params, normalize_obs=False))
-  p.update_observation_stats(second)
-  assert float(p.obs_count[...]) == 3
-  np.testing.assert_array_equal(p.normalize_observations(second), second)
+  for component in (p.actor, p.critic):
+    norm = component.input_norm
+    assert type(norm).__name__ == "RSNorm"
+    np.testing.assert_allclose(norm.mean[...], all_obs.mean(0), rtol=1e-6)
+    np.testing.assert_allclose(norm.std[...], all_obs.std(0), rtol=1e-6)
+    assert float(norm.count[...]) == 3
+    out = component.normalize_input(second)
+    assert np.isfinite(out).all() and float(out[0, 1]) == 0.0     # constant channel -> 0
+
+
+def test_rsnorm_clips_and_flattens_leading_axes():
+  from barl_jax.networks.input_norm import RSNormConfig
+  norm = RSNormConfig(clip=2.0).build(2)
+  norm.observe(jnp.array([[[0., 0.], [2., 2.]]]))          # (1, 2, 2): two samples
+  np.testing.assert_allclose(norm.mean[...], [1., 1.])
+  np.testing.assert_allclose(norm(jnp.array([[1., 101.]])), [[0., 2.]], atol=1e-6)
+
+
+def test_new_run_must_normalize_inputs_but_saved_models_load_as_trained():
+  from barl_jax.compat import upgrade_model
+  from barl_jax.config.run import RunConfig as _RunConfig
+  with pytest.raises(ValueError, match="must normalize"):
+    _RunConfig.from_dict({"model": "SAC", "env": "HalfCheetah", "model_overrides": {
+      "components": {"critic": {"input_norm": {"class": "Identity"}}}}})
+  with pytest.raises(ValueError, match="normalize_obs=false"):
+    _RunConfig.from_dict({"model": "SAC", "env": "HalfCheetah",
+                          "model_overrides": {"params": {"normalize_obs": False}}})
+  model = _RunConfig.from_dict({"model": "SAC", "env": "HalfCheetah", "model_overrides": {
+    "params": {"normalize_obs": True}}}).model_config
+  assert model.components.actor.input_norm.class_name == "RSNorm"
+  # A format-4 save: one policy-level switch becomes every actor's and critic's part.
+  saved = model.to_dict()
+  for slot in ("actor", "critic"):
+    saved["components"][slot].pop("input_norm")
+  for enabled, expected in ((False, "Identity"), (True, "RSNorm")):
+    upgraded = upgrade_model({**saved, "params": {**saved["params"], "normalize_obs": enabled}})
+    assert "normalize_obs" not in upgraded["params"]
+    for slot in ("actor", "critic"):
+      assert upgraded["components"][slot]["input_norm"]["class_name"] == expected
+    assert "input_norm" not in upgraded["components"]["entropy"]
 
 
 def test_checkpoint_uses_saved_spec_without_current_defaults(tmp_path):

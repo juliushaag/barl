@@ -48,7 +48,7 @@ def make_probe_fn(policy):
   """A jitted `(observation, action, key) -> {"q": (B,), "entropy": (B,)?}`
   pinned to the policy's current weights in eval mode, or None if the policy
   has no critic. `q` is the critic's expectation at the clean noise level, on
-  the normalized observation -- independent of `Policy.score`/`supports_bon`,
+  the raw observation (each component applies its own `input_norm`) -- independent of `Policy.score`/`supports_bon`,
   so it exists for every critic-backed policy. `entropy` is present only when
   the actor reports one."""
   if getattr(policy, "critic", None) is None:
@@ -61,9 +61,8 @@ def make_probe_fn(policy):
   # its own members, which rejects nnx state captured from the outer trace.
   @nnx.jit
   def jitted(module, observation, action, key):
-    obs = module.normalize_observations(observation)
-    out = {"q": module.critic.expectation(obs, action)}
-    _, entropy = module.actor.generate_action(obs, critic=module.critic, key=key)
+    out = {"q": module.critic.expectation(observation, action)}
+    _, entropy = module.actor.generate_action(observation, critic=module.critic, key=key)
     if entropy is not None:
       out["entropy"] = entropy
     return out

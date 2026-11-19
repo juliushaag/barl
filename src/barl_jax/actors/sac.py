@@ -48,7 +48,7 @@ class StochasticActor(ActorOptim, Actor):
     self.net = config.mlp.build(self.obs_dim, 2 * self.action_dim, latent_dim, layers, rngs=rngs)
 
   def dist(self, s):
-    out = self.net((s,)).astype(jnp.float32)
+    out = self.net((self.normalize_input(s),)).astype(jnp.float32)
     mean, log_std = jnp.split(out, 2, axis=-1)
     std = jnp.exp(jnp.clip(log_std, self.config.log_std_min, self.config.log_std_max))
     return mean, std

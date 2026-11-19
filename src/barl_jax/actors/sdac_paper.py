@@ -132,7 +132,7 @@ class PaperDDPMActor(Actor):
   # ---- the chain -----------------------------------------------------------
   def predict_eps(self, obs, x, n):
     t = jnp.reshape(jnp.asarray(n, jnp.float32) * TIME_PRE_SCALE, (-1, 1))
-    return self.field(obs, x, t).astype(jnp.float32)
+    return self.field(self.normalize_input(obs), x, t).astype(jnp.float32)
 
   def denoise(self, obs, key):
     """`GaussianDiffusion.p_sample`: x_T = prior_scale * N(0, I), then n = T-1 .. 0,

@@ -1,7 +1,7 @@
 """Checkpoint format versions and the state migrations between them.
 
 A migration upgrades a checkpoint written at `version` to `version + 1` by
-renaming parameter paths inside one component slot. Loading never rewrites the
+renaming state paths, inside one component slot or from the policy root. Loading never rewrites the
 files: the current state tree is mapped back to the saved layout (renames
 inverted, newest first), orbax restores into that template, and the values land
 in the current tree. One rename list therefore serves policy checkpoints and
@@ -11,10 +11,6 @@ resume checkpoints alike -- an optimizer's moments sit under the same
 To change a saved layout: bump `POLICY_VERSION` / `TRAINING_VERSION`, append a
 `StateMigration` for the old version, and add a fixture under
 `tests/fixtures/policy_v<old>/` written by the old code.
-
-A new default that would change what an *old* checkpoint computes is pinned by
-a `SavedModelUpgrade`: it rewrites the model spec saved in the checkpoint, for
-checkpoints written at or before its version, before the spec is built.
 """
 
 from dataclasses import dataclass
@@ -30,8 +26,10 @@ Renames = tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
 class StateMigration:
   version: int        # reads a checkpoint written at this version ...
   description: str    # ... and states what changed on the way to version + 1
-  slot: str           # the component slot whose subtree is renamed
-  renames: Renames    # (old subpath, new subpath) under `slot`
+  slot: str | None    # the component slot whose subtree is renamed (None: the policy root)
+  # (old subpath, new subpath) under `slot`. Several new paths may name the same
+  # old one: each is restored from it.
+  renames: Renames
 
 
 MIGRATIONS = (
@@ -53,48 +51,16 @@ MIGRATIONS = (
   ),
   StateMigration(
     version=4,
-    description="FloqCritic and ValueForcingCritic gained running observation "
-                "normalization (`obs_norm`, default on). Checkpoints written before keep "
-                "it off (see SAVED_MODEL_UPGRADES), so their state layout is unchanged.",
-    slot="critic",
-    renames=(),
+    description="Observation normalization moved from the Policy into an `input_norm` part "
+                "of every actor and critic; each starts from the statistics the Policy kept "
+                "(see `compat.config.upgrade_model` for the matching config).",
+    slot=None,
+    renames=tuple(
+      ((f"obs_{stat}",), (slot, "input_norm", stat))
+      for slot in ("actor", "critic") for stat in ("mean", "std", "count")
+    ),
   ),
 )
-
-
-@dataclass(frozen=True)
-class SavedModelUpgrade:
-  version: int        # applies to checkpoints written at this version or earlier
-  description: str
-  upgrade: object     # (model mapping) -> model mapping
-
-
-def _flow_critics_keep_obs_norm_off(model: dict) -> dict:
-  critic = (model.get("components") or {}).get("critic")
-  if (isinstance(critic, dict) and "obs_norm" not in critic
-      and critic.get("class", critic.get("class_name")) in ("FloqCritic", "ValueForcingCritic")):
-    model = {**model, "components": {**model["components"],
-                                     "critic": {**critic, "obs_norm": False}}}
-  return model
-
-
-SAVED_MODEL_UPGRADES = (
-  SavedModelUpgrade(
-    version=4,
-    description="FloqCritic / ValueForcingCritic: `obs_norm` now defaults to on; a "
-                "checkpoint trained without it keeps it off.",
-    upgrade=_flow_critics_keep_obs_norm_off,
-  ),
-)
-
-
-def upgrade_saved_model(model: dict, version: int) -> dict:
-  """The model spec saved in a checkpoint of `version`, with every default that
-  changed since pinned to what that checkpoint was trained with."""
-  for rule in SAVED_MODEL_UPGRADES:
-    if version <= rule.version:
-      model = rule.upgrade(model)
-  return model
 
 OLDEST_POLICY_VERSION = min([m.version for m in MIGRATIONS] + [POLICY_VERSION])
 OLDEST_TRAINING_VERSION = min([m.version for m in MIGRATIONS] + [TRAINING_VERSION])
@@ -110,18 +76,18 @@ def check_version(version, *, kind: str = "policy") -> int:
   return version
 
 
-def _rename(path: tuple, slot: str, renames, *, inverse: bool) -> tuple:
-  """`path` with the first matching subpath under `slot` renamed. Longest
-  match first, so a nested rename wins over its parent's."""
-  pairs = [(new, old) if inverse else (old, new) for old, new in renames]
+def _rename(path: tuple, slot: str | None, renames, *, inverse: bool) -> tuple:
+  """`path` with its first matching subpath renamed (under `slot`, when given).
+  Longest match first, so a nested rename wins over its parent's. Matches may
+  start anywhere: a resume checkpoint nests the policy under its own prefix."""
+  prefix = (slot,) if slot is not None else ()
+  pairs = [(prefix + new, prefix + old) if inverse else (prefix + old, prefix + new)
+           for old, new in renames]
   pairs.sort(key=lambda pair: -len(pair[0]))
-  for i, segment in enumerate(path):
-    if segment != slot:
-      continue
-    rest = path[i + 1:]
+  for i in range(len(path)):
     for src, dst in pairs:
-      if rest[:len(src)] == src:
-        return path[:i + 1] + dst + rest[len(src):]
+      if path[i:i + len(src)] == src:
+        return path[:i] + dst + path[i + len(src):]
   return path
 
 

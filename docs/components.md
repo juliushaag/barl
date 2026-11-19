@@ -20,8 +20,10 @@ model_overrides:
                                           # or {class: CQL, alpha: 1.0, n_actions: 10}
       ensemble: {n_models: 2, value_reduce: mean, target_reduce: min}
       mlp: {class: MLP, norm: batchrenorm}
+      input_norm: {class: RSNorm, clip: 10.0}   # per-feature observation normalization
       constraints: [{class: WeightNorm}]
     actor:
+      input_norm: {class: RSNorm}         # every actor and critic has its own
       constraints: [{class: WeightNorm}]  # constraints work on actors too
 ```
 
@@ -44,6 +46,7 @@ From the command line, address any field by its path:
 | `target` | `NoTarget` (bootstrap through the frozen live net, CrossQ), `Polyak` (`tau`, `delay`) | `critics/targets.py` |
 | `objective` | `TD`, `NoiseConditionedTD` (NCLQL), `CQL` (CQL(H) penalty on top of TD; stat-free `mlp.norm` only) | `critics/objectives.py` |
 | `ensemble` | `n_models`, `value_reduce` / `target_reduce` = `mean` \| `min` | `critics/base.py` |
+| `input_norm` | `RSNorm` (running per-feature mean/std, `eps`, `clip`); `Identity` loads old checkpoints only | `networks/input_norm.py` |
 
 `DirectCritic`, `EnsembleCritic`, `C51Critic` and `HLGaussCritic` are *presets*:
 registered names whose only difference is their default parts. `FloqCritic`
@@ -65,21 +68,21 @@ the same thing:
 | `critic.head.support` | `critic.head.support.endpoints`, `.dual` | `critic/head/support/{min,max,sigma,leak,multiplier}` |
 | `critic.target` | `critic.target.net_target`, `.steps` | `critic/target/gap` |
 | `critic.objective` | `critic.objective.sigmas` | `critic/objective/{clean_td_loss,smoothing_loss}` |
+| `critic.input_norm` | `critic.input_norm.{mean,std,count}` | -- |
 
 A part that trains parameters of its own declares its optimizer keys
 (`LearnedSupport`: `support`, `support_dual`). The component collects them, along
 with parameter ownership and the `after_step` hooks, automatically. These losses
 are logged as `critic/loss/support` and `critic/loss/support_dual`.
 
-## Observation normalization
+## Input normalization
 
-`obs_norm: true` on any critic normalizes each observation feature with running
-statistics, shared by all of the critic's networks (state under
-`critic.obs_norm`). Use it with any trunk that has no per-feature input
-normalization of its own: floq and Value Forcing turn it on by default, and
-LayerNorm `DirectCritic` or SimBa-trunk critics need it on high-dimensional
-DMC tasks. The default CrossQ trunk of C51 and HL-Gauss normalizes its input
-itself.
+`input_norm` is a field of every actor and critic, and each owns its statistics
+(`actor.input_norm`, `critic.input_norm`): the first thing any of its networks,
+target and distilled copies included, does to an observation. It must be
+per-feature. `RSNorm` is the default and the only variant a new run may use;
+see [extending.md](extending.md) for why a per-sample LayerNorm/RMSNorm is not
+enough.
 
 ## Constraints
 
@@ -120,8 +123,13 @@ an old format:
   `noise.enabled: true` → `objective.class: NoiseConditionedTD`.
 - `cql: {enabled: true, ...}` → `objective: {class: CQL, ...}`; `support_from_random` →
   `head.support.from_random`.
+- `compat/config.py::upgrade_model` turns a saved `params.normalize_obs` into
+  each actor's and critic's `input_norm` (`RSNorm` with the old unclipped
+  mapping, or `Identity`); `upgrade_model_overrides` drops
+  `normalize_obs: true` from YAML/`--set` and refuses `false`.
 - `compat/checkpoint.py` holds the checkpoint format versions and the stepwise
-  state migrations (renamed parameter paths). Policy checkpoints and resume
+  state migrations (renamed parameter paths; format 4 -> 5 seeds
+  `actor.input_norm.*` and `critic.input_norm.*` from the policy's `obs_*`). Policy checkpoints and resume
   checkpoints both go through it, because optimizer moments sit under the same
   paths as their parameters.
 

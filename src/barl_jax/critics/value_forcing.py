@@ -70,9 +70,6 @@ class ValueForcingCriticConfig(QCriticConfig):
   head: HeadConfig = field(default_factory=ScalarHeadConfig)
   ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
   target: TargetConfig = field(default_factory=lambda: PolyakConfig(joint_forward=False))
-  # Its LayerNorm trunk has no per-feature input normalization of its own, and
-  # the noisy return enters as one raw scalar among the observation features.
-  obs_norm: bool = True
   # Euler steps used to bring the bootstrap sample from z0 to z_tau.
   flow_steps: int = 10
   # The Q estimate: `value_samples` return samples, each integrated in
@@ -198,7 +195,7 @@ class ValueForcingCritic(QCritic):
 
   def raw(self, s, a, level=None):
     """Per-member Q in reward-scaled units, `(N, B, 1)`."""
-    return self._raw(self.normalize_obs(s), a)
+    return self._raw(self.normalize_input(s), a)
 
   def _raw(self, state, a):
     estimate = self._estimate(self.net, state, a, self.config.value_samples,
@@ -207,7 +204,7 @@ class ValueForcingCritic(QCritic):
 
   def return_samples(self, s, a, key, samples: int = 32, steps: int | None = None):
     """Samples of the return distribution in reward-scaled units, `(N, B, samples)`."""
-    s = self.normalize_obs(s)
+    s = self.normalize_input(s)
     b = s.shape[0]
     z0 = jax.random.normal(key, (b * samples, 1))
     z1 = self.integrate(self.net, jnp.repeat(s, samples, axis=0), jnp.repeat(a, samples, axis=0),
@@ -220,8 +217,7 @@ class ValueForcingCritic(QCritic):
               entropy_bonus=0.0, *, key=None) -> dict:
     key = self.rngs.noise() if key is None else key
     tau_key, start_key, eps_key = jax.random.split(key, 3)
-    self.observe(obs)
-    obs, next_obs = self.normalize_obs(obs), self.normalize_obs(next_obs)
+    obs, next_obs = self.normalize_input(obs), self.normalize_input(next_obs)
     b = obs.shape[0]
     tau = jax.random.uniform(tau_key, (b, 1))
     z0 = jax.random.normal(start_key, (b, 1))

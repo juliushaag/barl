@@ -13,13 +13,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from barl_jax.compat import (
-  POLICY_VERSION,
-  check_version,
-  policy_class_for,
-  restore_state,
-  upgrade_saved_model,
-)
+from barl_jax.compat import POLICY_VERSION, check_version, policy_class_for, restore_state
 
 
 @contextmanager
@@ -74,7 +68,7 @@ def saved_model(path, name=None):
   saved = meta.get("spec")
   if not isinstance(saved, dict) or "model" not in saved:
     raise ValueError(f"Checkpoint {path} has no versioned model spec")
-  model = upgrade_saved_model(dict(saved["model"]), meta["format_version"])
+  model = dict(saved["model"])
   # Checkpoints from before `chunk_size` moved into the params carry it as a kwarg.
   model["params"] = {**model.get("params", {}), **(meta.get("kwargs") or {})}
   # Saved configs may name keys a later version removed (`chunk_size`,

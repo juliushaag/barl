@@ -114,7 +114,9 @@ class ModelConfig:
     """Rebuild a model from a complete `to_dict()` mapping, without consulting
     current defaults -- a saved model is authoritative. `strict=False` (saved
     checkpoints) warns about and drops keys this version no longer has."""
-    values = drop_unknown(values, ("policy", "params", "components"), path="model", strict=strict)
+    from barl_jax.compat import upgrade_model
+    values = drop_unknown(upgrade_model(values), ("policy", "params", "components"), path="model",
+                          strict=strict)
     if not strict:
       check_legacy_params(values.get("params", {}), path="params")
     default = cls()
@@ -132,7 +134,8 @@ class ModelConfig:
 
   def overridden(self, overrides: Mapping[str, Any], *, strict: bool = True) -> "ModelConfig":
     """Apply a partial `model_overrides` mapping on top of this model."""
-    overrides = drop_unknown(overrides, ("policy", "params", "components"),
+    from barl_jax.compat import upgrade_model_overrides
+    overrides = drop_unknown(upgrade_model_overrides(overrides, strict=strict), ("policy", "params", "components"),
                              path="model_overrides", strict=strict)
     if not strict:
       check_legacy_params(overrides.get("params", {}), path="model_overrides.params")

@@ -125,6 +125,12 @@ class PartTree:
     part = self.parts().get(str(subpath[0]))
     return part.param_labels(subpath[1:]) if part is not None else None
 
+  def observe(self, obs) -> None:
+    """A training batch's observations, handed down once per gradient step
+    before the losses run (an `input_norm` part folds them into its statistics)."""
+    for part in self.parts().values():
+      part.observe(obs)
+
   def before_step(self):
     for part in self.parts().values():
       part.before_step()
@@ -203,6 +209,16 @@ class Component(PartTree):
     # only keep a component constructed outside a Policy usable.
     self.slot       = type(self).__name__.lower()
     self._config_s  = _Static(config)
+    # Every component that runs a network on observations normalizes them
+    # first, per feature, with its own part (`barl_jax.networks.input_norm`).
+    input_norm = getattr(config, "input_norm", None)
+    if input_norm is not None:
+      self.input_norm = input_norm.build(self.obs_dim)
+
+  def normalize_input(self, obs):
+    """`obs` as this component's networks see it."""
+    norm = getattr(self, "input_norm", None)
+    return obs if norm is None else norm(obs)
 
   @property
   def config(self):

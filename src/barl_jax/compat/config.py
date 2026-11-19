@@ -7,6 +7,9 @@ no longer exist, so a current mapping passes through unchanged, and a partial
 override is rewritten key by key.
 
 Rules, oldest first. Remove a rule once nothing that predates it needs loading.
+
+`upgrade_model` / `upgrade_model_overrides` hold the rules that span the whole
+model mapping (a policy param that became a field of every component).
 """
 
 from typing import Any, Callable, Mapping
@@ -141,3 +144,66 @@ def upgrade_component(values: Mapping[str, Any], class_name: str | None = None) 
   for rule in RULES:
     values = rule(values, class_name)
   return values
+
+
+# ---- whole-model rules -------------------------------------------------------
+
+def _has_input_norm(values) -> bool:
+  from dataclasses import fields
+
+  from barl_jax.registration import get_component
+  try:
+    config_type = get_component(_class_of(values)).config_type
+  except (KeyError, TypeError):
+    return False
+  return config_type is not None and any(f.name == "input_norm" for f in fields(config_type))
+
+
+def upgrade_model(values: Mapping[str, Any]) -> dict:
+  """A complete saved model mapping in the current schema.
+
+  policy format 4 -> 5: `params.normalize_obs` (one set of statistics owned by
+  the Policy) became the `input_norm` part of every actor and critic. A model
+  trained with it gets `RSNorm` without clipping and with the old std floor --
+  the same mapping, and the state migration hands it the saved statistics; a
+  model trained without it gets `Identity`, so it reproduces unchanged."""
+  values = dict(values)
+  params = dict(values.get("params", {}))
+  if "normalize_obs" not in params:
+    return values
+  enabled = params.pop("normalize_obs")
+  norm = ({"class_name": "RSNorm", "eps": 1.0e-12, "clip": None} if enabled
+          else {"class_name": "Identity"})
+  components = {}
+  for slot, component in dict(values.get("components", {})).items():
+    if isinstance(component, Mapping) and "input_norm" not in component \
+        and _has_input_norm(component):
+      component = {**component, "input_norm": dict(norm)}
+    components[slot] = component
+  values["params"] = params
+  values["components"] = components
+  return values
+
+
+def upgrade_model_overrides(overrides: Mapping[str, Any], *, strict: bool = True) -> dict:
+  """A partial `model_overrides` mapping (YAML, `--set`) in the current schema.
+
+  policy format 4 -> 5: `params.normalize_obs: true` is now the default of every
+  actor and critic (`input_norm: {class: RSNorm}`) and is dropped; `false` is
+  refused, because a new run always normalizes its inputs per feature (lenient
+  parsing of a saved run config warns and drops it instead)."""
+  overrides = dict(overrides)
+  params = overrides.get("params")
+  if not isinstance(params, Mapping) or "normalize_obs" not in params:
+    return overrides
+  params = dict(params)
+  if not params.pop("normalize_obs"):
+    message = ("model_overrides.params.normalize_obs=false: observation normalization moved into "
+               "each actor and critic (`input_norm`, RSNorm by default) and cannot be turned off "
+               "for a new run; drop the key")
+    if strict:
+      raise ValueError(message)
+    import warnings
+    warnings.warn(message, stacklevel=3)
+  overrides["params"] = params
+  return overrides
